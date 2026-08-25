@@ -1,0 +1,87 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+ENV/
+.python-version
+pip-wheel-metadata/
+
+# Virtual environments / package managers
+.venv/
+venv/
+.env/
+.env
+.env.*
+!.env.example
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*.code-workspace
+.DS_Store
+Thumbs.db
+
+# Test / coverage / tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+pytestdebug.log
+
+# Build / distribution / generated output
+build/
+dist/
+*.egg-info/
+.eggs/
+site/
+
+# Logs and runtime data
+*.log
+logs/
+tmp/
+temp/
+*.pid
+*.sqlite3
+*.db
+
+# Node / frontend
+node_modules/
+.next/
+out/
+.npm/
+.eslintcache
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Local secrets / deployment config
+secrets/
+*.pem
+*.key
+*.crt
+
+# Database / cache local state
+redis-data/
+cache/
+
+# Miscellaneous
+*.bak
+*.tmp
+*.orig
+
+# Project-specific local config
+backend/.env
+backend/.env.*
+!backend/.env.example
