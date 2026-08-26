@@ -22,8 +22,28 @@ compliance status and recommended action per site.
 
 ## Status
 
-This commit establishes the project structure and research foundation.
-Application logic begins in the following commit.
+Data model, FortyGuard integration, and the core compliance-check engine are
+built and tested end-to-end:
+
+- SQLAlchemy models (Organization, User, Site, ShiftWindow, ComplianceCheck)
+  and a seeded `ThresholdRule` table with real OSHA NEP, Cal/OSHA, and UAE
+  values, migrated via Alembic
+- Vendored FortyGuard client with an async service wrapper, confirmed working
+  against the real API
+- `POST /sites` and `POST /sites/{id}/check` — the latter pulls live `tcm`
+  heatmap data for a site's polygon, compares against jurisdiction
+  thresholds, and records a `ComplianceCheck`
+- Core compliance logic (unit conversion, threshold selection) covered by
+  tests using mocked FortyGuard responses — no live API calls needed to run
+  the test suite
+
+**Known constraint:** FortyGuard's `tcm` heatmap endpoint returns tile
+temperatures in Celsius, despite the vendor client's own docstring stating
+°F — confirmed by inspecting a real response, not from documentation. All
+temperature handling in this repo converts explicitly; don't trust vendor
+docstrings for units without re-verifying against a live response.
+
+**Not yet built:** Redis caching/rate-limiting layer, frontend, deployment.
 
 ## Repository structure
 
@@ -42,4 +62,10 @@ Application logic begins in the following commit.
 
 ## Setup
 
-Setup instructions will be added alongside the first functional commit.
+    docker-compose up -d
+    docker-compose exec backend alembic upgrade head
+    docker-compose exec backend python -m app.seed
+
+## Tests
+
+    docker-compose exec backend pytest tests/ -v

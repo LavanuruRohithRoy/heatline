@@ -13,6 +13,7 @@ python-multipart==0.0.12
 tenacity==9.0.0
 geojson==3.2.0
 shapely==2.0.6
+requests==2.32.3
 pytest==8.3.3
 pytest-asyncio==0.24.0
-requests==2.32.3
+aiosqlite==0.20.0

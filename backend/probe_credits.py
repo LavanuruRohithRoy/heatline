@@ -41,6 +41,9 @@ async def main() -> None:
     )
     print("Heatmap result activity_id:", result.get("activity_id"))
 
+    import json
+    print(json.dumps(result, indent=2)[:3000])
+
     after = await get_usage_async()
     print("Usage after:", after)
 
