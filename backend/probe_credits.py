@@ -34,7 +34,7 @@ async def main() -> None:
         polygon_aoi=TEST_AOI,
         start_date="2026-08-20",
         filter_type=3,          # single_day, per samples.py's FILTER_TYPES
-        granularity=100,
+        granularity=60,
         analytic_type="exceedance",
         threshold=26.7,         # 80°F in Celsius — the OSHA NEP trigger
         direction="above",
