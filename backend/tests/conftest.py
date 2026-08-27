@@ -2,6 +2,14 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from app.models import Base
+from app.core.redis_client import redis_client
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _redis_test_isolation():
+    await redis_client.flushdb()
+    yield
+    await redis_client.aclose()
 
 
 @pytest_asyncio.fixture
