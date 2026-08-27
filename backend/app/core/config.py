@@ -10,6 +10,10 @@ class Settings(BaseSettings):
     database_url: str
     redis_url: str
 
+    jwt_secret: str
+    jwt_algorithm: str = "HS256"
+    jwt_expire_hours: int = 24
+
     environment: str = "development"
     poll_interval_seconds: float = 2.0
     poll_timeout_seconds: float = 120.0
