@@ -1,5 +1,6 @@
 import uuid
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
@@ -7,12 +8,22 @@ from pydantic import BaseModel
 from app.core.db import get_db
 from app.core.security import get_current_user, CurrentUser
 from app.core.rate_limit import enforce_check_rate_limit, PLAN_LIMITS
-from app.models import Site, Jurisdiction, ComplianceCheck, Organization, Plan
+from app.core.exceptions import DomainError, SiteNotFoundError
+from app.models import Site, Jurisdiction, Organization, Plan
 from app.services.compliance_service import run_compliance_check
 from app.routes.auth import router as auth_router
+from app.schemas.site import SiteResponse
+from app.schemas.compliance_check import ComplianceCheckResponse
+from app.schemas.organization import OrganizationResponse
+from app.core.exceptions import DomainError, SiteNotFoundError, PermissionDeniedError
 
 app = FastAPI(title="Heatline API", version="0.1.0")
 app.include_router(auth_router)
+
+
+@app.exception_handler(DomainError)
+async def domain_error_handler(request: Request, exc: DomainError):
+    return JSONResponse(status_code=exc.status_code, content={"detail": str(exc)})
 
 
 @app.get("/health")
@@ -20,7 +31,7 @@ async def health() -> dict:
     return {"status": "ok"}
 
 
-@app.get("/public/sites")
+@app.get("/public/sites", response_model=list[SiteResponse])
 async def public_sites(db: AsyncSession = Depends(get_db)):
     """No auth required — only returns sites belonging to designated public-demo orgs."""
     result = await db.execute(
@@ -37,7 +48,7 @@ class SiteCreate(BaseModel):
     jurisdiction: Jurisdiction
 
 
-@app.post("/sites")
+@app.post("/sites", response_model=SiteResponse)
 async def create_site(
     payload: SiteCreate,
     current_user: CurrentUser = Depends(get_current_user),
@@ -50,10 +61,7 @@ async def create_site(
     existing_count = len(existing_count_result.scalars().all())
     max_sites = PLAN_LIMITS[org.plan]["max_sites"]
     if existing_count >= max_sites:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Site limit reached: {max_sites} sites on the {org.plan.value} plan",
-        )
+        raise DomainError(f"Site limit reached: {max_sites} sites on the {org.plan.value} plan")
 
     site = Site(org_id=current_user.org_id, **payload.model_dump())
     db.add(site)
@@ -62,7 +70,7 @@ async def create_site(
     return site
 
 
-@app.get("/sites")
+@app.get("/sites", response_model=list[SiteResponse])
 async def list_sites(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -71,7 +79,7 @@ async def list_sites(
     return result.scalars().all()
 
 
-@app.post("/sites/{site_id}/check")
+@app.post("/sites/{site_id}/check", response_model=ComplianceCheckResponse)
 async def check_site(
     site_id: uuid.UUID,
     current_user: CurrentUser = Depends(get_current_user),
@@ -79,7 +87,7 @@ async def check_site(
 ):
     site = await db.get(Site, site_id)
     if site is None or site.org_id != current_user.org_id:
-        raise HTTPException(status_code=404, detail="Site not found")
+        raise SiteNotFoundError("Site not found")
 
     org = await db.get(Organization, current_user.org_id)
     await enforce_check_rate_limit(str(current_user.org_id), org.plan)
@@ -88,14 +96,14 @@ async def check_site(
     return check
 
 
-@app.post("/organizations/upgrade")
+@app.post("/organizations/upgrade", response_model=OrganizationResponse)
 async def upgrade_org(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Simulated upgrade — flips plan to Standard. No real billing integration."""
     if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Only admins can upgrade the organization")
+        raise PermissionDeniedError("Only admins can upgrade the organization")
     org = await db.get(Organization, current_user.org_id)
     org.plan = Plan.STANDARD
     await db.commit()

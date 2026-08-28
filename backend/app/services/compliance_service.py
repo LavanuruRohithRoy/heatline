@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Site, ThresholdRule, ComplianceCheck, MetricType
 from app.integrations.fortyguard_service import create_heatmap_async, get_env_params_async
 from app.integrations.cache import get_or_fetch_heatmap
+from app.core.exceptions import UpstreamDataError
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,7 @@ async def run_compliance_check(session: AsyncSession, site: Site) -> ComplianceC
 
     features = heatmap_result["result"]["map_data"]["features"]
     if not features:
-        raise ValueError("No features returned in heatmap response")
+        raise UpstreamDataError("No features returned in heatmap response")
 
     max_tile = max(features, key=lambda f: f["properties"]["max_temperature"])
     max_tile_temp_c = max_tile["properties"]["max_temperature"]
@@ -75,12 +76,12 @@ async def run_compliance_check(session: AsyncSession, site: Site) -> ComplianceC
         )
         locations = env_result["result"]["locations"]
         if not locations:
-            raise ValueError("No locations returned in env_params response")
+            raise UpstreamDataError("No locations returned in env_params response")
         raw_values = locations[0]["parameters"]["heat_index_celsius"]
         # NOTE: field is misnamed by FortyGuard — values are empirically already °F, no conversion applied.
         clean_values = [v for v in raw_values if v is not None]
         if not clean_values:
-            raise ValueError("No non-null heat_index_celsius values in env_params response")
+            raise UpstreamDataError("No non-null heat_index_celsius values in env_params response")
         heat_index_f = max(clean_values)
         logger.info("env_params heat index: %.2f°F", heat_index_f)
 
