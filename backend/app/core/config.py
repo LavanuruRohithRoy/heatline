@@ -18,5 +18,7 @@ class Settings(BaseSettings):
     poll_interval_seconds: float = 2.0
     poll_timeout_seconds: float = 120.0
 
+    cors_allowed_origins: str = "http://localhost:5173"
+
 
 settings = Settings()

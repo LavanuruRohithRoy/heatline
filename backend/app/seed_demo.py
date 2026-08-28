@@ -1,0 +1,51 @@
+import asyncio
+from datetime import date, timedelta
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker
+from app.core.config import settings
+from app.models import Organization, Site, Jurisdiction, Plan
+
+DEMO_SITES = [
+    {
+        "name": "LA Construction Site",
+        "jurisdiction": Jurisdiction.OSHA_FEDERAL,
+        "polygon_geojson": {
+            "type": "FeatureCollection",
+            "features": [{"type": "Feature", "properties": {}, "geometry": {
+                "type": "Polygon",
+                "coordinates": [[[-118.2500,34.0500],[-118.2400,34.0500],[-118.2400,34.0600],[-118.2500,34.0600],[-118.2500,34.0500]]]
+            }}]
+        },
+    },
+    {
+        "name": "Sacramento Warehouse Yard",
+        "jurisdiction": Jurisdiction.CAL_OSHA,
+        "polygon_geojson": {
+            "type": "FeatureCollection",
+            "features": [{"type": "Feature", "properties": {}, "geometry": {
+                "type": "Polygon",
+                "coordinates": [[[-121.5000,38.5800],[-121.4900,38.5800],[-121.4900,38.5900],[-121.5000,38.5900],[-121.5000,38.5800]]]
+            }}]
+        },
+    },
+]
+
+
+async def seed_demo():
+    engine = create_async_engine(settings.database_url)
+    async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with async_session() as session:
+        org = Organization(name="Heatline Demo Org", plan=Plan.STANDARD, is_public_demo=True)
+        session.add(org)
+        await session.flush()
+
+        for s in DEMO_SITES:
+            session.add(Site(org_id=org.id, **s))
+
+        await session.commit()
+        print(f"Seeded demo org {org.id} with {len(DEMO_SITES)} sites")
+    await engine.dispose()
+
+
+if __name__ == "__main__":
+    asyncio.run(seed_demo())

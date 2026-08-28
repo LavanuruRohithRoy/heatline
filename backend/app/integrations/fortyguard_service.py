@@ -16,3 +16,6 @@ async def get_env_params_async(**kwargs) -> dict:
 
 async def get_usage_async() -> dict:
     return await asyncio.to_thread(_client.fetch_api_key_usage)
+
+async def get_satellite_segmentation_async(**kwargs) -> dict:
+    return await asyncio.to_thread(_client.satellite_segmentation, **kwargs)

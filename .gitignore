@@ -61,6 +61,15 @@ node_modules/
 out/
 .npm/
 .eslintcache
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+frontend/dist/
+frontend/.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
 
 # OS junk
 .DS_Store
