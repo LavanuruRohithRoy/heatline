@@ -16,6 +16,7 @@ from app.schemas.site import SiteResponse
 from app.schemas.compliance_check import ComplianceCheckResponse
 from app.schemas.organization import OrganizationResponse
 from app.core.exceptions import DomainError, SiteNotFoundError, PermissionDeniedError
+from app.services.compliance_service import run_compliance_check, CheckMode
 
 app = FastAPI(title="Heatline API", version="0.1.0")
 app.include_router(auth_router)
@@ -79,9 +80,10 @@ async def list_sites(
     return result.scalars().all()
 
 
-@app.post("/sites/{site_id}/check", response_model=ComplianceCheckResponse)
+@app.post("/sites/{site_id}/check")
 async def check_site(
     site_id: uuid.UUID,
+    mode: CheckMode = CheckMode.HISTORICAL,
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -92,8 +94,8 @@ async def check_site(
     org = await db.get(Organization, current_user.org_id)
     await enforce_check_rate_limit(str(current_user.org_id), org.plan)
 
-    check = await run_compliance_check(db, site)
-    return check
+    result = await run_compliance_check(db, site, mode=mode)
+    return result
 
 
 @app.post("/organizations/upgrade", response_model=OrganizationResponse)

@@ -14,6 +14,19 @@ def _make_cache_key(**kwargs) -> str:
     return f"heatmap:{digest}"
 
 
+def _is_empty_result(result: dict) -> bool:
+    payload = result.get("result")
+    if not isinstance(payload, dict):
+        return False
+    features = payload.get("map_data", {}).get("features")
+    locations = payload.get("locations")
+    if features is not None and len(features) == 0:
+        return True
+    if locations is not None and len(locations) == 0:
+        return True
+    return False
+
+
 async def get_or_fetch_heatmap(fetch_fn, *, is_historical: bool = True, **cache_params) -> dict:
     """
     Wraps a FortyGuard heatmap fetch with a Redis cache, keyed by the exact
@@ -27,6 +40,8 @@ async def get_or_fetch_heatmap(fetch_fn, *, is_historical: bool = True, **cache_
 
     result = await fetch_fn()
 
-    ttl = HISTORICAL_TTL_SECONDS if is_historical else RECENT_TTL_SECONDS
-    await redis_client.set(key, json.dumps(result), ex=ttl)
+    if not _is_empty_result(result):
+        ttl = HISTORICAL_TTL_SECONDS if is_historical else RECENT_TTL_SECONDS
+        await redis_client.set(key, json.dumps(result), ex=ttl)
+
     return result

@@ -1,5 +1,10 @@
 import asyncio
 from app.integrations.fortyguard_client import FortyGuardClient
+import os
+from app.core.config import settings
+
+
+os.environ.setdefault("FORTYGUARD_API_KEY", settings.fortyguard_api_key)
 
 _client = FortyGuardClient()
 

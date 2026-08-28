@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime, date, timedelta
+from enum import Enum
 from shapely.geometry import shape
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,30 +12,28 @@ from app.core.exceptions import UpstreamDataError
 logger = logging.getLogger(__name__)
 
 
-async def run_compliance_check(session: AsyncSession, site: Site) -> ComplianceCheck:
-    """
-    Step 1 (always): heatmap/tcm -> worst-case (max-temperature) tile across the site polygon.
-    This alone is sufficient for jurisdictions whose regulation is defined in raw
-    dry-bulb temperature (e.g. Cal/OSHA Title 8 §3395(b) explicitly defines
-    "Temperature" as dry bulb °F, not heat index).
+class CheckMode(str, Enum):
+    HISTORICAL = "historical"
+    FORECAST = "forecast"
 
-    Step 2 (conditional): env_params, queried at the max tile's centroid, only when
-    at least one applicable rule for this site's jurisdiction is heat-index-based
-    (e.g. OSHA federal NEP). Skipping this call for dry-bulb-only jurisdictions is
-    both more correct (right metric per regulation) and cheaper (one fewer paid call).
-    """
-    yesterday = (date.today() - timedelta(days=1)).isoformat()
+
+async def run_compliance_check(session: AsyncSession, site: Site, mode: CheckMode = CheckMode.HISTORICAL):
+    target_date = (date.today() - timedelta(days=6)).isoformat()
+    filter_type = 3
+    start_time = None
+    is_historical_cache = True
 
     heatmap_params = {
         "polygon_aoi": site.polygon_geojson,
-        "start_date": yesterday,
-        "filter_type": 3,
+        "start_date": target_date,
+        "filter_type": filter_type,
         "granularity": 60,
         "analytic_type": "tcm",
     }
+
     heatmap_result = await get_or_fetch_heatmap(
         lambda: create_heatmap_async(**heatmap_params),
-        is_historical=True,
+        is_historical=is_historical_cache,
         **heatmap_params,
     )
 
@@ -44,7 +43,7 @@ async def run_compliance_check(session: AsyncSession, site: Site) -> ComplianceC
 
     max_tile = max(features, key=lambda f: f["properties"]["max_temperature"])
     max_tile_temp_c = max_tile["properties"]["max_temperature"]
-    max_tile_temp_f = (max_tile_temp_c * 9 / 5) + 32  # tcm is confirmed °C
+    max_tile_temp_f = (max_tile_temp_c * 9 / 5) + 32
 
     tile_centroid = shape(max_tile["geometry"]).centroid
     lon, lat = tile_centroid.x, tile_centroid.y
@@ -66,19 +65,19 @@ async def run_compliance_check(session: AsyncSession, site: Site) -> ComplianceC
             "latitude": lat,
             "longitude": lon,
             "temperature": max_tile_temp_c,
-            "start_date": yesterday,
-            "filter_type": 3,
+            "start_date": target_date,
+            "filter_type": filter_type,
         }
+
         env_result = await get_or_fetch_heatmap(
             lambda: get_env_params_async(**env_params_kwargs),
-            is_historical=True,
+            is_historical=is_historical_cache,
             **env_params_kwargs,
         )
         locations = env_result["result"]["locations"]
         if not locations:
             raise UpstreamDataError("No locations returned in env_params response")
         raw_values = locations[0]["parameters"]["heat_index_celsius"]
-        # NOTE: field is misnamed by FortyGuard — values are empirically already °F, no conversion applied.
         clean_values = [v for v in raw_values if v is not None]
         if not clean_values:
             raise UpstreamDataError("No non-null heat_index_celsius values in env_params response")
@@ -88,21 +87,27 @@ async def run_compliance_check(session: AsyncSession, site: Site) -> ComplianceC
     breached_rule = None
     for rule in rules:
         if rule.heat_index_threshold_f is None:
-            continue  # fixed-window rules (UAE) — time-based, handled separately
-
+            continue
         if rule.metric_type == MetricType.HEAT_INDEX:
             if heat_index_f is not None and heat_index_f >= rule.heat_index_threshold_f:
                 breached_rule = rule
                 break
-        else:  # DRY_BULB_TEMPERATURE
+        else:
             if max_tile_temp_f >= rule.heat_index_threshold_f:
                 breached_rule = rule
                 break
 
-    # Store the metric that actually drove the decision for this jurisdiction, not
-    # always the heat index — otherwise a Cal/OSHA record would misleadingly show
-    # a heat-index number for a decision that was legally based on raw temperature.
     recorded_value = heat_index_f if needs_heat_index and heat_index_f is not None else max_tile_temp_f
+
+    if mode == CheckMode.FORECAST:
+        return {
+            "site_id": site.id,
+            "mode": "forecast",
+            "forecast_for": target_date,
+            "heat_index_value": recorded_value,
+            "threshold_breached": breached_rule is not None,
+            "action_triggered": breached_rule.mandated_action if breached_rule else None,
+        }
 
     check = ComplianceCheck(
         site_id=site.id,
