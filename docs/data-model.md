@@ -17,63 +17,66 @@ ThresholdRule   (static reference table, not tied to Organization)
 ### `organizations`
 - `id` (UUID, PK)
 - `name`
+- `plan` (enum: `trial`, `standard`)
+- `is_public_demo` (bool) — flags the one org whose sites are shown on the
+  unauthenticated public landing page; no other org's data is ever exposed
+  without a valid session
 - `created_at`
 
 The tenant boundary. Every `Site` and `User` belongs to exactly one
-Organization. See `05-security-and-multitenancy.md` for how this boundary
-is enforced at the query layer.
+Organization. See `security-and-multitenancy.md` for enforcement.
 
 ### `users`
 - `id` (UUID, PK)
 - `org_id` (FK → organizations)
 - `email` (unique)
+- `password_hash`
 - `role` (enum: `admin`, `hse_manager`, `viewer`)
-
-The `role` enum exists now so basic RBAC can be layered on without a schema
-migration later. See `05-security-and-multitenancy.md` for current
-enforcement status.
 
 ### `sites`
 - `id` (UUID, PK)
 - `org_id` (FK → organizations)
 - `name`
-- `polygon_geojson` (JSON — see decision rationale below)
+- `polygon_geojson` (JSON — validated as a closed GeoJSON Polygon on write)
 - `jurisdiction` (enum: `osha_federal`, `cal_osha`, `uae`)
 
 **Why `polygon_geojson` is generic `JSON`, not Postgres `JSONB`:** the
-column is never queried *inside* (no filtering on properties within the
-polygon), only read whole and passed through to FortyGuard's API. Generic
-`JSON` is dialect-portable — it compiles against both Postgres (production)
-and SQLite (test suite, in-memory, zero setup cost). `JSONB`'s indexing and
-containment-query advantages were never going to be used, so there was no
-real capability given up by choosing portability. This was a real bug we
-hit (SQLite couldn't compile `JSONB` DDL) and fixed by changing the type,
-not by working around the test environment. See `04-decisions.md` ADR-005.
+column is never queried *inside* — only read whole and passed through to
+FortyGuard's API. Generic `JSON` compiles against both Postgres
+(production) and SQLite (test suite). See `decisions.md` ADR-005.
 
 ### `threshold_rules`
 - `id` (UUID, PK)
 - `jurisdiction` (string, matches `sites.jurisdiction`)
-- `heat_index_threshold_f` (float, nullable)
+- `metric_type` (enum: `heat_index`, `dry_bulb_temperature`)
+- `heat_index_threshold_f` (float, nullable) — holds the threshold value
+  regardless of `metric_type`; the column name predates the
+  `metric_type` split and was kept rather than renamed (a cosmetic-only
+  migration was judged not worth the risk this close to submission)
 - `mandated_action` (string)
 - `citation` (string)
 
-Static, seeded, **not user-editable**. Regulatory thresholds are legal
-facts, not tenant configuration — see `04-decisions.md` ADR-003 for the
-full rationale, including the deliberate tradeoff this creates (updates
-require a controlled process, currently manual).
+Static, seeded, **not user-editable** — see `decisions.md` ADR-003.
 
-`heat_index_threshold_f` is nullable to support fixed-window rules (e.g.
-UAE's midday work-stoppage ban, which is time-based, not a temperature
-threshold at all).
+`metric_type` exists because different jurisdictions' regulations specify
+different metrics: OSHA federal's NEP cites heat index; Cal/OSHA Title 8
+§3395(b) explicitly defines its "Temperature" trigger as dry-bulb °F, not
+heat index. The compliance engine reads this field to decide which
+FortyGuard-derived value to compare against each rule — see
+`fortyguard-integration.md`.
 
 Seeded values, real and cited:
-| Jurisdiction | Threshold | Action | Citation |
-|---|---|---|---|
-| osha_federal | 80°F | Provide water/shade/rest breaks | OSHA NEP on Heat Hazards, Nov 2025 |
-| osha_federal | 90°F | Mandatory rest breaks, 15min/2hr | OSHA NEP, high-risk tier |
-| cal_osha | 80°F | Provide shade/water access | Cal/OSHA Title 8 §3395 |
-| cal_osha | 95°F | High-heat procedures, buddy system | Cal/OSHA Title 8 §3395 |
-| uae | null (fixed window) | Work stoppage 12:30–15:00, Jun 15–Sep 15 | UAE Ministry of HR |
+| Jurisdiction | Metric | Threshold | Action | Citation |
+|---|---|---|---|---|
+| osha_federal | heat_index | 80°F | Provide water/shade/rest breaks | OSHA NEP on Heat-Related Hazards (enforcement directive), revised Apr 10, 2026 |
+| osha_federal | heat_index | 90°F | Mandatory rest breaks, 15min/2hr | OSHA NEP, revised Apr 10, 2026 |
+| cal_osha | dry_bulb_temperature | 80°F | Provide shade/water access | Cal/OSHA Title 8 §3395(b) |
+| cal_osha | dry_bulb_temperature | 95°F | High-heat procedures, buddy system | Cal/OSHA Title 8 §3395(e) |
+| uae | dry_bulb_temperature | null (fixed window) | Work stoppage 12:30–15:00, Jun 15–Sep 15 | UAE Ministry of HR |
+
+UAE checks are rejected explicitly at the API level (not silently passed)
+since FortyGuard has no live data coverage outside the US — see
+`fortyguard-integration.md`.
 
 ### `shift_windows`
 - `id` (UUID, PK)
@@ -81,22 +84,26 @@ Seeded values, real and cited:
 - `start_time`, `end_time`
 - `days_active` (string, e.g. `"mon-fri"`)
 
-Not yet consumed by the compliance engine — currently a compliance check
-can be triggered at any time. Intended future use: only alert/escalate
-during a site's actual active shift window, avoiding noise outside working
-hours.
+Not yet consumed by the compliance engine — a check can be triggered
+regardless of shift timing. Real, unbuilt roadmap item.
 
 ### `compliance_checks`
 - `id` (UUID, PK)
 - `site_id` (FK → sites)
 - `checked_at` (timestamp)
-- `heat_index_value` (float, °F — always converted, see ADR-001)
+- `heat_index_value` (float, °F) — holds whichever metric actually drove
+  the decision for that jurisdiction (heat index for OSHA federal, raw
+  temperature for Cal/OSHA); the column name is a known naming gap, same
+  reasoning as `threshold_rules.heat_index_threshold_f` above
 - `threshold_breached` (bool)
 - `action_triggered` (string, nullable)
 
-**This table is append-only by design, never updated in place.** It is the
-audit trail — the record of what the system knew and decided at each point
-in time. This was the correct call made early in the schema design,
-recognized in hindsight as the single most important table for the
-product's actual value proposition: a defensible, timestamped compliance
-history a real HSE manager or auditor could rely on.
+Append-only by design — the audit trail. Only `mode=historical` checks
+write a row here; `mode=forecast` checks compute and return the
+same fields without persisting, since a forecast is not a confirmed
+observation.
+
+**Known gap, not yet closed:** this table does not currently store which
+`ThresholdRule` id/version, FortyGuard activity ID, or raw response
+produced a given decision — meaning a stored check is not yet fully
+reproducible/auditable back to its source.

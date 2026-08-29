@@ -1,87 +1,75 @@
 # Security & Multi-Tenancy
 
-## The real, urgent risk: public demo link vs. metered credit budget
+## Public demo link vs. metered credit budget
 
-This system calls a metered, credit-limited third-party API. A publicly
-reachable demo link with no protection is a direct liability against a
-finite 5,000,000-credit budget — not a hypothetical, since a single
-`heatmap` + `env_params` compliance check costs real credits every time it
-executes against live (uncached) data.
+**Mitigations, implemented:**
 
-**Mitigations, in order of what actually matters:**
+1. **The unauthenticated public route (`GET /public/sites`) is read-only
+   and returns only pre-seeded data belonging to one designated
+   `is_public_demo` organization.** No credit-spending route is reachable
+   without authentication. This is the primary protection for a publicly
+   shared link.
+2. **Rate limiting** on `POST /sites/{id}/check`, per-organization,
+   Redis-backed, scaled by plan (`trial`: 10 checks/hour, `standard`: 200
+   checks/hour — see `rate_limit.py`).
+3. **JWT authentication** required on every mutating and credit-spending
+   route.
 
-1. **Demo mode is cache/DB-read-only by default.** The public demo serves
-   pre-seeded sites with already-fetched, cached compliance data. A
-   "refresh" action either replays cached results with a visible
-   "last checked" timestamp, or is gated behind an authenticated path.
-   This makes the public link safe regardless of traffic volume — the
-   credit-spending path is never reachable without authentication.
-2. **Rate limiting on any route that can trigger a live FortyGuard call.**
-   Implemented via the same Redis instance already used for caching — a
-   token-bucket or fixed-window counter per API key/IP, hard-capped
-   (e.g. a handful of live checks per minute). This is additive
-   infrastructure cost of roughly zero, since Redis is already deployed
-   for caching.
-3. **Basic API-key requirement on expensive routes.** Not full RBAC —
-   simply: does this request carry a valid key. Applied to
-   `POST /sites/{id}/check`; read-only demo routes remain open.
+## Multi-tenancy — implemented and verified
 
-## Multi-tenancy — what's structurally present vs. what's enforced
+Every authenticated query is scoped to `current_user.org_id`, derived
+server-side from the JWT, never from client-supplied input. Verified
+directly: a created site is correctly stamped with the authenticated
+user's org, and a cross-org check attempt against another org's site
+returns `404`, not the resource. `POST /sites`'s request body does not
+accept an `org_id` field at all — it cannot be spoofed by a client.
 
-**Structurally present:** every `Site` and `User` carries an `org_id`
-foreign key. The schema is multi-tenant-shaped from the first migration.
+## Authentication — real, implemented
 
-**Not yet enforced:** query-level scoping — ensuring an authenticated
-user's queries are automatically filtered to their own `org_id` — is a
-real, necessary, and currently incomplete piece of work. This is a small,
-well-understood fix (a `WHERE org_id = current_user.org_id` clause applied
-consistently at the query layer, ideally via a shared dependency/session
-scope rather than repeated per-route), not a new subsystem. Treated as a
-priority item, not deferred indefinitely.
+Email/password registration and login, bcrypt password hashing, JWT
+(single access token, 24-hour expiry, **no refresh token** — a deliberate
+scope decision; re-login after expiry is the accepted UX for the current
+build). The JWT's claims (`user_id`, `org_id`, `role`) are trusted for the
+token's lifetime once issued — the system does **not** currently re-check
+against the database on each request whether the user/org/role still
+exist or are unchanged. This is a real, acknowledged gap: a
+deleted/downgraded user retains access until their token naturally
+expires. See `07`.
 
-## RBAC — implemented at the level the system actually needs
+## RBAC — enforced, not just modeled
 
-The `users.role` enum (`admin`, `hse_manager`, `viewer`) exists in the
-schema. Current build applies it minimally (e.g., only `admin` can create
-sites); full per-route permission enforcement is a realistic half-day of
-remaining work, tracked as a near-term task rather than a "someday" item.
+`POST /sites` requires `admin` or `hse_manager` role. `POST
+/organizations/upgrade` requires `admin`. Other authenticated routes are
+open to any valid role. This is a real, if partial, enforcement — not
+every route has a role check, and `viewer` currently has no meaningfully
+restricted capability beyond what any authenticated user can do.
 
-**ABAC (attribute-based access control) was considered and explicitly not
-built.** ABAC earns its complexity at a scale with many fine-grained,
-context-dependent policies across large numbers of tenants and resource
-types. This system has three roles and single-org data isolation as its
-actual access-control surface. Building an ABAC policy engine here would
-be complexity without a corresponding real requirement — naming that
-tradeoff explicitly is more honest, and demonstrates better engineering
-judgment, than partially implementing a framework the system doesn't need.
+**ABAC was considered and explicitly not built** — see `06` for the
+reasoning; unchanged from the original assessment.
 
-## Input validation & injection prevention
+## Input validation
 
-Not a gap requiring new work — already true of the current stack, worth
-stating explicitly rather than treated as unaddressed:
+- `polygon_geojson` is validated on write (`POST /sites`) as a real,
+  closed GeoJSON Polygon via Shapely — malformed payloads are rejected
+  with `400` before ever reaching FortyGuard.
+- All request bodies are Pydantic models, validated at the boundary.
+- All database access is via SQLAlchemy's parameterized query builder —
+  no raw string-interpolated SQL exists anywhere in the codebase.
 
-- **Request validation**: every route's input is a Pydantic model, which
-  validates types and structure at the request boundary before any
-  business logic runs.
-- **SQL injection**: all database access goes through SQLAlchemy's ORM
-  with parameterized queries; no raw string-interpolated SQL exists
-  anywhere in the codebase.
+## CORS — configured via environment, not hardcoded
 
-## CORS
+`allow_origins` is populated from an environment variable
+(`ALLOWED_ORIGINS`, comma-separated) rather than hardcoded — set to the
+deployed frontend's real Vercel URL and `http://localhost:5173` (or
+whichever local dev port the frontend uses) for local development. This
+replaces an earlier open `["*"]` placeholder used during initial local
+development.
 
-Configured via FastAPI's standard CORS middleware, scoped to the actual
-frontend origin once deployed. A few lines of necessary configuration, not
-a design question — included here for completeness of the security
-surface, not because it required a decision.
+## What was explicitly not built, and why
 
-## What was explicitly not built, and why that's the right call here
-
-- **Full OAuth/session-based auth flow**: API-key auth (already how
-  FortyGuard itself authenticates us) is sufficient for the current scope
-  and consistent with the pattern already used for the upstream
-  integration.
-- **Distributed rate-limit coordination across multiple app instances**:
-  moot at single-instance deployment (see
-  `06-scalability-and-engineering-tradeoffs.md`); Redis-backed limiting
-  already generalizes correctly if/when the app scales horizontally, since
-  the limit state lives outside the app process.
+- Full OAuth/social login, refresh tokens, password reset, email
+  verification — real, legitimate features, out of scope for this
+  timeline, noted as roadmap items rather than pretended-away.
+- Distributed rate-limit coordination — moot at single-instance
+  deployment; Redis-backed state already generalizes correctly if the app
+  scales horizontally later.

@@ -1,5 +1,5 @@
 import asyncio
-from datetime import date, timedelta
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from app.core.config import settings
@@ -35,15 +35,23 @@ async def seed_demo():
     engine = create_async_engine(settings.database_url)
     async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with async_session() as session:
-        org = Organization(name="Heatline Demo Org", plan=Plan.STANDARD, is_public_demo=True)
-        session.add(org)
-        await session.flush()
+        existing_org = await session.execute(
+            select(Organization).where(Organization.is_public_demo.is_(True)).limit(1)
+        )
+        org = existing_org.scalar_one_or_none()
 
-        for s in DEMO_SITES:
-            session.add(Site(org_id=org.id, **s))
+        if org is None:
+            org = Organization(name="Heatline Demo Org", plan=Plan.STANDARD, is_public_demo=True)
+            session.add(org)
+            await session.flush()
 
-        await session.commit()
-        print(f"Seeded demo org {org.id} with {len(DEMO_SITES)} sites")
+            for s in DEMO_SITES:
+                session.add(Site(org_id=org.id, **s))
+
+            await session.commit()
+            print(f"Seeded demo org {org.id} with {len(DEMO_SITES)} sites")
+        else:
+            print(f"Demo org already exists: {org.id}; skipping seed")
     await engine.dispose()
 
 

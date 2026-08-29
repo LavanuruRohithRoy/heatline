@@ -7,122 +7,98 @@ Outdoor-labor employers — in construction, logistics, and agriculture — are
 subject to an active, escalating regulatory environment around occupational
 heat exposure, with real financial and human stakes.
 
-In the United States, the Occupational Safety and Health Administration
-(OSHA) has proposed a federal Heat Injury and Illness Prevention rule and, in
-advance of its finalization, is actively enforcing exposure risk through a
-National Emphasis Program (revised April 2026). The program's defined
-trigger is a heat index of 80°F or above, at which point inspection risk and
-mandatory water, rest, and acclimatization obligations apply. California,
-Oregon, and Washington already enforce their own binding state-level
-standards. Internationally, the United Arab Emirates has enforced a
-threshold-triggered midday outdoor-work restriction since 2005 — a
-structurally identical regulatory mechanism applied under different specific
-terms.
+In the United States, OSHA has proposed a federal Heat Injury and Illness
+Prevention rule; that rule remains under rulemaking and is **not yet a
+finalized binding standard**. In advance of any final rule, OSHA is
+actively enforcing exposure risk through a National Emphasis Program (NEP),
+revised April 2026, which targets high-risk industries with heat-priority
+inspections and outreach. California enforces its own binding standard
+(Title 8 §3395), triggered by ambient dry-bulb temperature — 80°F for shade
+and water provisions, 95°F for high-heat procedures — not heat index.
+Oregon's standard, by contrast, is heat-index-based. Internationally, the
+United Arab Emirates has enforced a threshold-triggered midday outdoor-work
+restriction since 2005.
 
-The human and financial cost is documented and current: 48 US worker deaths
-from environmental heat exposure were recorded in 2024. Under the 2026 OSHA
-penalty schedule, a Serious violation carries a maximum penalty of $16,550,
-and a Willful or Repeat violation up to $165,514. Documented enforcement
-cases show a single heat-related fatality investigation generating multiple
-Serious citations in the range of $66,000, escalating to Willful penalty
-packages exceeding $660,000 where evidence shows employer awareness without
-corrective action.
+The human and financial cost is real: 48 US worker deaths from
+environmental heat exposure were recorded in 2024. Under the current OSHA
+penalty schedule, a Serious violation carries a maximum penalty in the
+range of $16,000+, and a Willful or Repeat violation substantially more.
 
 ## 2. Existing Systems and Their Limitations
 
-Two categories of tooling currently address this space, and both have a
-structural gap.
-
-**Public reference tools**, such as the OSHA-NIOSH Heat Safety Tool, provide
-real-time, location-based heat index readings and general safety guidance.
-These tools operate on regional weather-service data at a single-location,
-single-user scale, and are not designed for multi-site portfolio management.
-The OSHA-NIOSH tool itself is publicly noted as not currently receiving
-updates.
+**Public reference tools**, such as the OSHA-NIOSH Heat Safety Tool,
+provide real-time, location-based heat index readings and general safety
+guidance, built on regional weather-service data at single-location,
+single-user scale — not designed for multi-site portfolio management.
 
 **Enterprise construction and field-safety platforms** (e.g. Procore, HCSS,
-HammerTech) provide mature, multi-site safety and compliance management at
-scale. However, their treatment of weather data is documented as reactive —
-captured and logged as part of a permanent project record for dispute and
-claims defense — rather than used as a forward-looking, predictive input
-into scheduling or compliance decisions.
+HammerTech) provide mature, multi-site safety management, but generally
+treat weather data as a passive, reactive record for project documentation
+rather than a forward-looking, jurisdiction-aware compliance input.
 
-No identified existing product combines hyperlocal, sub-city-scale heat
-exposure duration data with active jurisdictional compliance thresholds, at
-a multi-site portfolio level, as a forward-looking decision-support tool.
+No identified existing product combines hyperlocal, site-specific heat data
+with active, jurisdiction-specific regulatory thresholds — including the
+fact that different jurisdictions specify different metrics (heat index vs.
+raw temperature) — at a multi-site portfolio level.
 
-## 3. Why Hyperlocal Data Changes the Analysis
+## 3. Why Hyperlocal Data and Jurisdiction-Specific Metrics Matter
 
 Standard regional weather forecasting cannot meaningfully differentiate
-between job sites within the same metropolitan area. Analysis of FortyGuard
-temperature data at parcel scale demonstrates that peak temperature varies
-minimally between nearby sites (approximately 0.9–1.7°F), while the duration
-a site spends above a given threshold — its exceedance and persistence —
-varies substantially across the same short distances, by up to 15.2 hours in
-observed cases. Duration of exposure, not peak temperature, is the
-operative variable in the regulatory frameworks described above, and it is
-precisely the variable that site-specific, high-resolution data can resolve
-where regional forecasting cannot.
+between job sites within the same metropolitan area, and cannot by itself
+resolve which regulatory metric applies where. Two sites at the same
+regional forecast temperature can have different real heat index values
+depending on local humidity, and a system evaluating both against the same
+metric — when their governing regulations specify different ones — would
+produce an incorrect compliance determination for at least one of them.
+This is not a hypothetical: it was found and corrected during this
+project's own development (see `docs/04-decisions.md`, ADR-008).
 
-## 4. Proposed System
+## 4. System, As Currently Built
 
-A portfolio-level heat-compliance decision-support system, structured as
-follows:
+A portfolio-level heat-compliance decision-support system:
 
-1. An employer registers job sites (as geographic coordinates or defined
-   polygon areas) and associated shift schedules.
-2. For each site and shift window, the system evaluates hyperlocal heat
-   exposure duration against the applicable jurisdictional threshold.
-3. A rule engine, referencing a maintained table of real regulatory
-   thresholds (OSHA, applicable state standards, and comparable
-   international standards), converts exceedance data into a specific,
-   actionable compliance status: compliant, action required (e.g. adjusted
-   shift timing, increased rest frequency, crew rotation), or stand-down
-   recommended.
-4. A portfolio-level dashboard presents compliance status across all
-   registered sites, supporting proactive scheduling decisions ahead of a
-   shift rather than reactive response after exposure has occurred.
-5. Where deeper environmental context is warranted, the system can
-   incorporate land-cover and surface-composition analysis to explain the
-   contributing factors behind a site's heat profile, and generate a
-   structured record suitable for compliance documentation.
+1. An employer registers job sites as GeoJSON polygons, each tagged with
+   its governing jurisdiction.
+2. On request, the system evaluates a site's most recent available
+   conditions against the jurisdiction's real, seeded regulatory
+   threshold, using the metric that jurisdiction's own regulation
+   specifies.
+3. A rule table, referencing real regulatory thresholds and citations,
+   produces a specific compliance status and, if breached, the specific
+   mandated action.
+4. A dashboard presents this per site, along with satellite-derived
+   land-cover context explaining likely contributing factors (e.g.
+   unshaded pavement).
 
-The system is explicitly scoped as a decision-support tool. It does not
-determine employment, scheduling, or personnel decisions, and does not
-substitute for an employer's legal heat-illness-prevention plan obligations.
+**What is not yet built, stated plainly:** shift-schedule-aware evaluation,
+duration/persistence-based exposure analysis (as opposed to a
+worst-tile snapshot), scheduled/automatic monitoring, and full audit
+provenance (rule version and source data retained per decision). See
+`docs/07-known-limitations-and-roadmap.md` for the complete list.
+
+The system is explicitly scoped as decision support. It does not determine
+employment or scheduling decisions and does not substitute for an
+employer's own legal compliance obligations or professional judgment.
 
 ## 5. Commercial Rationale
 
-The buying entity is the employer organization, not the individual worker —
-consistent with the existing enterprise field-safety software market, and
-distinct from the free, individually-oriented public reference tool. The
-product is structurally recurring rather than one-time: heat-season
-compliance monitoring is an annually repeating operational need, and usage
-naturally scales with the number of active sites and the length of the heat
-season, aligning subscription revenue with underlying data consumption.
-
-Pricing in the range of comparable existing compliance software products
-(observed in the low hundreds of dollars per month) is modest relative to
-the financial exposure it is positioned against — a single Serious OSHA
-violation alone exceeds a full year of such a subscription by a wide
-margin.
+The buying entity is the employer organization, not the individual
+worker — consistent with the existing enterprise field-safety software
+market. The product is structurally recurring: heat-season compliance
+monitoring is an annually repeating operational need, and usage scales
+with site count and season length.
 
 ## 6. Scope of Evolution
 
-The core mechanism — threshold-triggered compliance evaluation from
-hyperlocal exposure data — generalizes beyond its initial US regulatory
-framing to any jurisdiction with a comparable threshold-based occupational
-heat standard, including the UAE's existing midday work restriction,
-pending underlying data coverage in that region. The system's integration
-pattern is also structured to be compatible with existing enterprise safety
-platforms' open API and marketplace models, positioning it as a
-complementary data layer rather than a competitor to established workflow
-tools in that space.
+The core mechanism — jurisdiction-aware, metric-correct threshold
+evaluation from hyperlocal data — generalizes to any jurisdiction with a
+comparable standard, including the UAE's midday work restriction, pending
+FortyGuard's data coverage expanding beyond its current US-only scope.
 
 ## 7. Summary
 
 This system applies hyperlocal temperature intelligence to a specific,
-underserved point in an active and financially material regulatory
-landscape: the gap between free, single-location public tools and mature,
-multi-site enterprise safety platforms that treat weather as a passive
-record rather than a predictive compliance input.
+underserved gap: the space between free, single-location public tools and
+enterprise platforms that treat weather as a passive record — while taking
+seriously that "compliance" requires matching each jurisdiction's actual
+specified metric, not a single generic heat number applied everywhere.

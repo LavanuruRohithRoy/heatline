@@ -10,6 +10,7 @@ button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .55; }
 .font-display { font-family: "Space Grotesk", sans-serif; }
 .leaflet-container { height: 100%; min-height: 0; width: 100%; background: #dce5e1; touch-action: pan-x pan-y; }
+.dark-map-tiles { filter: invert(0.9) hue-rotate(180deg) brightness(0.72) contrast(1.08) saturate(0.72); }
 .leaflet-container, .leaflet-pane, .leaflet-control-container { isolation: isolate; }
 .leaflet-control-zoom a { color: #101417 !important; }
 .leaflet-control-zoom a { min-height: 34px; min-width: 34px; line-height: 34px !important; }

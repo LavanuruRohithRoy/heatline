@@ -5,67 +5,66 @@ employers, built on FortyGuard's hyperlocal temperature intelligence API.
 
 ## Problem
 
-Employers operating outdoor job sites face active, dated regulatory exposure
-around heat — a 2026 federal enforcement program in the US, binding state law
-in California, Oregon, and Washington, and an equivalent threshold-based
-regulation in the UAE. No existing tool combines hyperlocal, site-specific
-heat-duration data with real jurisdictional compliance thresholds at a
-portfolio scale. See `docs/research_and_product_case.md` for the full
-problem statement, competitive landscape, and supporting research.
+Employers operating outdoor job sites face active, dated regulatory
+exposure around heat — an OSHA enforcement directive in the US, binding
+state law in California, and comparable threshold-based regulation
+elsewhere. No existing tool combines hyperlocal, site-specific heat data
+with real jurisdictional compliance thresholds at a portfolio scale. See
+`research_and_product_case.md` for the full problem statement and
+supporting research.
 
 ## What this is
 
-A system that ingests job-site locations and shift windows, evaluates
-site-specific heat exposure duration against applicable jurisdictional
-thresholds using FortyGuard's temperature intelligence API, and returns a
-compliance status and recommended action per site.
+A system that ingests job-site polygons and jurisdictions, evaluates each
+site against the metric its specific regulation actually specifies
+(heat index or raw temperature, depending on jurisdiction), and returns a
+compliance status and recommended action.
 
 ## Status
 
-Data model, FortyGuard integration, and the core compliance-check engine are
-built and tested end-to-end:
+Backend is functional and tested end-to-end: authentication, tenant
+isolation, per-jurisdiction compliance logic, caching, rate limiting, and
+a satellite-derived environmental context endpoint are built and verified.
+Frontend and deployment are in progress — see `docs/known-limitations-and-roadmap.md`
+for a complete, honest list of what's built versus what remains.
 
-- SQLAlchemy models (Organization, User, Site, ShiftWindow, ComplianceCheck)
-  and a seeded `ThresholdRule` table with real OSHA NEP, Cal/OSHA, and UAE
-  values, migrated via Alembic
-- Vendored FortyGuard client with an async service wrapper, confirmed working
-  against the real API
-- `POST /sites` and `POST /sites/{id}/check` — the latter pulls live `tcm`
-  heatmap data for a site's polygon, compares against jurisdiction
-  thresholds, and records a `ComplianceCheck`
-- Core compliance logic (unit conversion, threshold selection) covered by
-  tests using mocked FortyGuard responses — no live API calls needed to run
-  the test suite
-
-**Known constraint:** FortyGuard's `tcm` heatmap endpoint returns tile
-temperatures in Celsius, despite the vendor client's own docstring stating
-°F — confirmed by inspecting a real response, not from documentation. All
-temperature handling in this repo converts explicitly; don't trust vendor
-docstrings for units without re-verifying against a live response.
-
-**Not yet built:** Redis caching/rate-limiting layer, frontend, deployment.
+**Two confirmed vendor-data findings worth knowing before reading the
+code:** FortyGuard's `tcm` heatmap field returns Celsius despite the
+vendored client's docstring claiming Fahrenheit, and `env_params`'
+`heat_index_celsius` field returns values already in Fahrenheit despite
+its name — both confirmed by inspecting real responses, not by trusting
+documentation. See `docs/fortyguard-integration.md`.
 
 ## Repository structure
 
-    docs/           research and product documentation
-    backend/         FastAPI application (API, rule engine, FortyGuard
-                      integration, data layer)
-    frontend/         dashboard application
-    .github/workflows/ CI and uptime automation
+    docs/                 architecture, data model, decisions, limitations
+    research_and_product_case.md   problem statement and market research
+    backend/              FastAPI application
+    frontend/              React dashboard
+    .github/workflows/     CI and uptime automation
 
 ## Stack
 
-- Backend: Python, FastAPI
-- Database: PostgreSQL
-- Cache / rate control: Redis
+- Backend: Python, FastAPI, SQLAlchemy, Alembic
+- Database: PostgreSQL (Supabase in production)
+- Cache / rate limiting: Redis (Upstash in production)
+- Frontend: React (Vercel in production)
+- API hosting: Render
 - Data source: FortyGuard Temperature Intelligence API
 
-## Setup
+## Local setup
 
     docker-compose up -d
     docker-compose exec backend alembic upgrade head
     docker-compose exec backend python -m app.seed
+    docker-compose exec backend python -m app.seed_demo
 
 ## Tests
 
     docker-compose exec backend pytest tests/ -v
+
+## Documentation
+
+See `docs/` for full architecture, data model, FortyGuard integration
+details (including real measured credit costs), decision records, security
+model, scalability tradeoffs, and a complete known-limitations list.

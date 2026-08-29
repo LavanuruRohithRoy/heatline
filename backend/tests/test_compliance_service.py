@@ -1,8 +1,11 @@
 import pytest
 import uuid
 from unittest.mock import AsyncMock, patch
+from app.main import _normalize_satellite_context_payload
 from app.services.compliance_service import run_compliance_check
 from app.models import Site, Jurisdiction, ThresholdRule, MetricType
+from app.core.exceptions import UpstreamDataError
+from app.integrations.exceptions import TaskTimeoutError
 
 MOCK_HEATMAP_RESPONSE = {
     "result": {
@@ -28,7 +31,7 @@ MOCK_ENV_PARAMS_RESPONSE = {
             {
                 "lat": 34.055,
                 "lon": -118.235,
-                "parameters": {"heat_index_celsius": [95.5]},  # already-°F, per confirmed real API behavior
+                "parameters": {"heat_index_celsius": [35.2778]},
             }
         ]
     }
@@ -98,3 +101,83 @@ async def test_cal_osha_uses_dry_bulb_and_skips_env_params(async_session):
     assert check.heat_index_value == pytest.approx(100.56, abs=0.1)
     assert check.threshold_breached is True
     assert check.action_triggered == "high_heat_procedures_mandatory_buddy_system"
+
+
+@pytest.mark.asyncio
+async def test_run_compliance_check_wraps_vendor_timeout_as_upstream_data_error(async_session):
+    site = Site(
+        org_id=uuid.uuid4(), name="Vendor Error Site",
+        polygon_geojson={"type": "FeatureCollection", "features": []},
+        jurisdiction=Jurisdiction.OSHA_FEDERAL,
+    )
+    async_session.add(site)
+    await async_session.flush()
+
+    async_session.add(
+        ThresholdRule(
+            jurisdiction="osha_federal",
+            metric_type=MetricType.HEAT_INDEX,
+            heat_index_threshold_f=80.0,
+            mandated_action="provide_water",
+            citation="test",
+        )
+    )
+    await async_session.flush()
+
+    with patch(
+        "app.services.compliance_service.create_heatmap_async",
+        new=AsyncMock(side_effect=TaskTimeoutError("timed out")),
+    ):
+        with pytest.raises(UpstreamDataError, match="FortyGuard"):
+            await run_compliance_check(async_session, site)
+
+
+@pytest.mark.asyncio
+async def test_compliance_check_persists_metric_metadata(async_session):
+    site = Site(
+        org_id=uuid.uuid4(), name="Persisted Site",
+        polygon_geojson={"type": "FeatureCollection", "features": []},
+        jurisdiction=Jurisdiction.OSHA_FEDERAL,
+    )
+    async_session.add(site)
+    await async_session.flush()
+
+    async_session.add(
+        ThresholdRule(
+            jurisdiction="osha_federal",
+            metric_type=MetricType.HEAT_INDEX,
+            heat_index_threshold_f=80.0,
+            mandated_action="provide_water",
+            citation="test",
+        )
+    )
+    await async_session.flush()
+
+    with patch(
+        "app.services.compliance_service.create_heatmap_async",
+        new=AsyncMock(return_value=MOCK_HEATMAP_RESPONSE),
+    ), patch(
+        "app.services.compliance_service.get_env_params_async",
+        new=AsyncMock(return_value=MOCK_ENV_PARAMS_RESPONSE),
+    ):
+        check = await run_compliance_check(async_session, site)
+
+    assert check.metric_label == "Heat Index"
+    assert check.data_as_of == (__import__("datetime").date.today() - __import__("datetime").timedelta(days=6)).isoformat()
+
+
+def test_normalize_satellite_context_supports_documented_aliases():
+    payload = {
+        "result": {
+            "segmentation": {
+                "segments": {"roof": 42.0},
+                "image_content": "abc123",
+            },
+            "original_image": ["xyz123"],
+        }
+    }
+
+    segments, image = _normalize_satellite_context_payload(payload)
+
+    assert segments == {"roof": 42.0}
+    assert image == "data:image/png;base64,xyz123"

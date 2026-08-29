@@ -2,54 +2,51 @@
 
 ## Current limitations, stated plainly
 
-- **Live compliance checks are US-only** (`osha_federal`, `cal_osha`),
-  because FortyGuard's current API release only covers US locations. The
-  `uae` jurisdiction's regulatory data is real and seeded, but not
-  currently checkable against live data. This is an upstream vendor
-  constraint, documented in `03-fortyguard-integration.md`, not a gap in
-  our design.
-- **Manual-trigger only** — compliance checks run on demand
-  (`POST /sites/{id}/check`), not on a schedule. No automatic polling
-  exists yet.
-- **`ShiftWindow` data is not yet consumed** by the compliance engine — a
-  check can be triggered regardless of whether a site's shift is
-  currently active.
-- **Multi-tenant query scoping is structurally present but not fully
-  enforced** — see `05-security-and-multitenancy.md` for the specific,
-  scoped fix required.
+- **Live compliance checks are US-only.** UAE is seeded, real, and
+  explicitly rejected (not silently passed) at check-time — see
+  `decisions.md` ADR-006.
+- **Historical checks query a fixed lookback window (currently 6 days
+  back), not "yesterday."** This is a direct response to a confirmed
+  FortyGuard data-processing backlog encountered during development, not
+  the product's intended freshness — see `03`.
+- **Forecast mode does not yet perform true look-ahead** — see `03` for
+  why, and what would need to be re-verified against FortyGuard to fix it.
+- **JWT claims are trusted for the token's full lifetime** — a deleted or
+  role-changed user retains access until natural expiry (24h). Re-checking
+  against the database per request is a real, unbuilt fix.
+- **Vendor-task timeouts (a FortyGuard job stuck in `processing` past the
+  client's internal wait limit) are not yet mapped to a clean API error**
+  — encountered directly during development; currently surfaces as an
+  unhandled exception rather than a clean 502/504.
+- **`ShiftWindow` data is not consumed** by the compliance engine.
+- **Compliance records do not yet store rule version, vendor activity ID,
+  or raw source response** — the audit trail is not yet fully
+  reproducible back to its source, despite the traceability goal stated in
+  `01`.
+- **RBAC is partially, not fully, enforced** — `viewer` role has no
+  meaningfully distinct restrictions from other authenticated roles yet.
 - **Threshold updates require a manual reseed**, not an admin UI action —
-  a deliberate tradeoff (see ADR-003 in `04-decisions.md`), not an
-  oversight.
-- **No deployment yet** — Render/Supabase/Upstash endpoints not yet
-  provisioned; `keep_alive.yml` exists but is disabled until there's
-  something to ping.
+  deliberate tradeoff, see ADR-003.
+- **No refresh token, password reset, or email verification.**
 
-## Real, considered roadmap items (not built, but grounded in actual API capability)
+## Real, considered roadmap items
 
-- **Forecasting-driven alerts.** `heatmap`'s `start_date` genuinely accepts
-  values up to 12 hours into the future (confirmed in official docs). A
-  "this site will likely breach threshold in the next N hours" feature is
-  buildable on existing API capability, not speculative.
-- **`heat_intelligence` as the exportable audit deliverable.** The PDF
-  report this endpoint generates is the closest match to what a real HSE
-  manager needs to hand to a regulator or insurer — a documented artifact,
-  not a live number. Genuine near-term priority once core correctness and
-  safety items are done.
-- **`satellite_segmentation` as a persistent per-site context layer**,
-  cached alongside a site's record (land cover doesn't change day to day)
-  rather than fetched per-check — shown as contextual explanation next to
-  the compliance number.
-- **Scheduled polling**, once shift-window logic is wired in — checks
-  would run automatically during a site's active hours rather than only
-  on manual trigger.
-- **Threshold-update admin workflow** — a controlled, audited process for
-  updating `ThresholdRule` values when regulations change, replacing the
-  current manual-reseed approach.
+- **True forecasting**, once FortyGuard's near-future data window can be
+  confirmed reliably returning data (blocked on the vendor-side latency
+  issue described in `03`, not on our own code).
+- **`heat_intelligence` PDF reports** as an exportable audit deliverable —
+  not yet integrated.
+- **Scheduled/automatic polling**, once shift-window logic is wired in.
+- **Rule versioning and full decision provenance** (source response,
+  activity ID, rule version stored per check) — the single most important
+  gap for the product's audit-trail claim to be fully true.
+- **Threshold-update admin workflow.**
+- **Vendor-timeout error mapping** — small, real, near-term fix.
+- **Database-backed JWT/session validation** on each request, not just
+  trust-until-expiry.
 
-## What's deliberately out of scope, permanently (not "later")
+## What's deliberately out of scope, permanently
 
-See `06-scalability-and-engineering-tradeoffs.md` for the full reasoning
-on each: distributed/sharded architecture, dedicated API gateway,
-WebSockets, ABAC. These aren't deferred — they're assessed as
-inappropriate for this system's actual scale and would be re-evaluated
-only if that scale materially changed.
+See `06` for full reasoning: distributed/sharded architecture, dedicated
+API gateway, WebSockets, ABAC. Assessed as inappropriate at this system's
+actual scale, not deferred for later.

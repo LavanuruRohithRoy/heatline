@@ -1,116 +1,97 @@
 # Architecture Decision Records
 
-Each entry: the decision, why, and what was given up.
+## ADR-001: Heat index drives compliance for heat-index jurisdictions
 
-## ADR-001: Heat index (`env_params`), not raw temperature (`tcm`), drives compliance
+**Decision:** `env_params`-derived heat index is the compliance signal for
+jurisdictions whose regulation specifies heat index (currently: OSHA
+federal). See ADR-008 for the correction that this is jurisdiction-specific,
+not universal.
 
-**Decision:** the compliance check's primary signal is
-`env_params.heat_index_celsius`, derived from a `heatmap`/`tcm` tile
-temperature, not the raw `tcm` value directly.
-
-**Why:** OSHA's NEP and Cal/OSHA Title 8 §3395 both cite heat index
-(temperature + humidity), not ambient temperature. The two diverge
-meaningfully on humid days — raw temperature can under-report real risk
-by 10–15°F equivalent.
-
-**History:** the initial implementation used `tcm` directly as a
-placeholder for heat index. This was identified as a correctness gap
-during a deliberate system-design review, not caught by a test or a bug
-report — worth stating plainly rather than presenting the final design as
-if it were correct from the start.
-
-**Cost given up:** every compliance check now requires two chained,
-credit-costing API calls instead of one.
+**Why:** OSHA's NEP cites heat index, not raw ambient temperature.
 
 ## ADR-002: Max-tile value, not average, across a site's polygon
 
-**Decision:** when a site's polygon returns multiple `heatmap` tiles, the
-compliance engine uses the maximum tile value, not the mean.
+**Decision:** the compliance engine uses the maximum tile value from
+`heatmap`, not the mean, across a site's polygon.
 
-**Why:** this is a safety-compliance tool. Averaging away a site's hottest
-corner would under-trigger the required action for workers actually in
-that corner. Conservative-by-design, stated as such rather than left
-implicit.
+**Why:** conservative-by-design — averaging away a site's hottest corner
+would under-trigger the required action for workers actually in that
+corner.
 
 ## ADR-003: Static, seeded `ThresholdRule` table — not user-editable
 
 **Decision:** regulatory thresholds are seeded once, from cited sources,
-and are not exposed for tenant editing in the current build.
+not exposed for tenant editing.
 
-**Why:** these are legal facts, not business configuration. Allowing
-arbitrary customer edits would let a tenant silently misconfigure their
-own regulatory exposure — the opposite of what a compliance tool should
-allow.
-
-**Tradeoff acknowledged:** updating a threshold (e.g. if OSHA revises the
-NEP trigger) currently requires a manual migration/reseed, not a UI action.
-A real production version would need a controlled, audited update process
-(admin-only, versioned) — explicitly scoped as a roadmap item, not solved
-here.
+**Why:** these are legal facts, not business configuration. A controlled,
+audited update process is a real roadmap item, not solved here.
 
 ## ADR-004: Redis caching, keyed by exact request parameters
 
-**Decision:** every `heatmap` fetch is wrapped in a Redis cache keyed by a
-hash of its exact parameters (polygon, date, filter_type, granularity,
-analytic_type). Historical (already-elapsed-day) results cache for 7 days;
-same-day results cache for 1 hour.
+**Decision:** every `heatmap`/`env_params`/`satellite_segmentation` fetch
+is wrapped in a Redis cache keyed by a hash of its exact parameters.
+Historical results cache for 7 days; same-day results for 1 hour. Empty
+upstream responses (zero features/locations) are explicitly **not**
+cached.
 
-**Why:** two reasons, both real. First, cost control against a metered,
-credit-limited upstream API — repeated identical checks (dev iteration,
-demo re-runs, accidental double-clicks) must not re-spend credits.
-Second, this is legitimate production practice regardless of the credit
-constraint: caching a metered third-party API behind a short TTL is
-standard, not a hackathon-specific workaround.
-
-**History:** this was built *after* a real, costly debugging session (9
-heatmap calls, ~38,000 credits) where each retry during active development
-re-spent credits. The lesson — that dev-time iteration against a paid API
-needs caching from day one, not after the fact — is itself worth recording.
+**Why:** cost control against a metered API, and standard practice for a
+metered third-party dependency regardless. The "don't cache empty
+results" rule was added after a real incident: an empty response (caused
+by a genuine FortyGuard processing backlog) was cached and silently
+reused across multiple unrelated requests sharing the same parameters,
+masking the real cause for several debugging cycles until traced via a
+repeated vendor activity ID appearing in unrelated responses.
 
 ## ADR-005: Generic `JSON`, not Postgres `JSONB`, for `sites.polygon_geojson`
 
-**Decision:** the polygon column uses SQLAlchemy's dialect-portable `JSON`
-type, not Postgres-specific `JSONB`.
+**Decision:** dialect-portable `JSON`, not `JSONB`.
 
-**Why:** the column is never queried *inside* — no filtering on properties
-within the polygon JSON — so JSONB's indexing/containment-operator
-advantages were never being used. Generic `JSON` compiles against both
-Postgres (production) and SQLite (in-memory test suite), removing a real
-test-infrastructure dependency (a live Postgres container) for the test
-suite.
+**Why:** the column is never queried inside; portability across Postgres
+(prod) and SQLite (tests) was worth more than JSONB's unused indexing
+capability. Discovered as a hard test-suite blocker, not chosen
+proactively.
 
-**History:** this was discovered as a hard blocker, not chosen proactively
-— the original `JSONB` column caused `sqlalchemy.exc.CompileError` against
-SQLite during the first real test run. The fix was a genuine architecture
-correction (portability), not a workaround.
+## ADR-006: US-only live scope; UAE modeled but explicitly rejected, not silently skipped
 
-## ADR-006: US-only live scope; UAE modeled but not live-queryable
+**Decision:** UAE `ThresholdRule` data remains seeded and real, but
+`POST /sites/{id}/check` on a UAE-jurisdiction site returns a `400` with an
+explicit "not currently supported" message, rather than silently
+evaluating (and always passing, since its threshold is null).
 
-**Decision:** the product's live-data compliance checks are scoped to
-`osha_federal` and `cal_osha` jurisdictions. The `uae` `ThresholdRule`
-remains in the schema as real, cited regulatory data, but is explicitly
-documented as not currently queryable via FortyGuard, since FortyGuard's
-current release covers US locations only.
-
-**Why:** this is an honest response to a real, documented upstream vendor
-constraint (see `03-fortyguard-integration.md`), not a design choice we
-made. Removing the UAE data entirely would discard real regulatory
-research for no benefit; presenting it as live-checkable would misrepresent
-what the system can actually do today.
+**Why:** FortyGuard has no live coverage outside the US. An explicit
+rejection was added after review identified that the original
+implementation could return a misleading "compliant" result for a
+jurisdiction the system cannot actually evaluate.
 
 ## ADR-007: Centralized architecture, not distributed
 
-**Decision:** one FastAPI backend process, one Postgres instance, one
-Redis instance. No message queue, no service mesh, no horizontal
-partitioning.
+**Decision:** one FastAPI backend, one Postgres, one Redis — no message
+queue, no service mesh.
 
-**Why:** at current and near-term expected data volume (a handful of
-organizations, hundreds of sites at most), a distributed architecture adds
-operational complexity with no corresponding benefit. The system is
-designed to be *stateless at the application layer* (no in-process session
-state, all shared state in Postgres/Redis) specifically so it *could* scale
-horizontally later without a rewrite — see
-`06-scalability-and-engineering-tradeoffs.md`. Building the distributed
-infrastructure now, before it's needed, would be premature and would cost
-build time better spent on correctness (ADR-001) and safety (ADR-004,
-security doc).
+**Why:** appropriate at current and expected near-term scale; the
+application is stateless at the app layer specifically so it could scale
+horizontally later without a rewrite. See `06`.
+
+## ADR-008: Per-jurisdiction metric selection (correctness fix)
+
+**Decision:** `ThresholdRule.metric_type` distinguishes `heat_index` from
+`dry_bulb_temperature`. The compliance engine compares each rule against
+whichever FortyGuard-derived value matches its `metric_type`, and only
+calls `env_params` when at least one applicable rule needs heat index.
+
+**Why:** Cal/OSHA Title 8 §3395(b) defines its "Temperature" trigger as
+dry-bulb °F — verified directly against the regulation text. The original
+implementation applied heat index uniformly across all jurisdictions,
+which was a real correctness bug for Cal/OSHA, not a stylistic
+simplification. This also reduces cost: Cal/OSHA checks now skip
+`env_params` entirely (one fewer paid call per check).
+
+## ADR-009: Structured DTOs and domain-error mapping
+
+**Decision:** API routes return Pydantic response models rather than raw
+ORM objects; a `DomainError` hierarchy maps known failure cases to
+specific HTTP status codes (404/403/502) via a single exception handler.
+
+**Why:** decouples the public API contract from internal persistence
+schema, and gives API consumers a machine-distinguishable reason for
+failure instead of a uniform 500.

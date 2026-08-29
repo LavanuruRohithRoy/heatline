@@ -16,6 +16,9 @@ export interface HistoricalCheck {
   heat_index_value: number;
   threshold_breached: boolean;
   action_triggered: string | null;
+  metric_label?: string;
+  data_as_of?: string;
+  threshold_value?: number | null;
 }
 
 export interface ForecastCheck {
@@ -25,6 +28,9 @@ export interface ForecastCheck {
   heat_index_value: number;
   threshold_breached: boolean;
   action_triggered: string | null;
+  metric_label?: string;
+  data_as_of?: string;
+  threshold_value?: number | null;
 }
 
 export interface EnvironmentalContext {

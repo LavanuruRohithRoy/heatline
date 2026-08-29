@@ -13,5 +13,8 @@ class ComplianceCheck(Base):
     heat_index_value: Mapped[float] = mapped_column(Float, nullable=False)
     threshold_breached: Mapped[bool] = mapped_column(Boolean, nullable=False)
     action_triggered: Mapped[str] = mapped_column(String(255), nullable=True)
+    metric_label: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    data_as_of: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    threshold_value: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     site: Mapped["Site"] = relationship(back_populates="compliance_checks")

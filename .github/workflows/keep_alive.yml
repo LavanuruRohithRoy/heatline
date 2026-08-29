@@ -11,7 +11,7 @@
 #    steps:
 #      - name: Ping health endpoint
 #        run: |
-#          response=$(curl -s -o /dev/null -w "%{http_code}" " ${#{ secrets.BACKEND_HEALTH_URL }}")
+#          response=$(curl -s -o /dev/null -w "%{http_code}" "${{ secrets.BACKEND_HEALTH_URL }}")
 #          echo "Health check responded with status: $response"
 #          if [ "$response" -ne 200 ]; then
 #            echo "Warning: backend did not return 200"

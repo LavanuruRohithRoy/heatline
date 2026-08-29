@@ -14,6 +14,7 @@ from app.core.rate_limit import enforce_check_rate_limit, PLAN_LIMITS
 from app.core.exceptions import DomainError, SiteNotFoundError, UpstreamDataError
 from app.models import Site, Jurisdiction, Organization, Plan
 from app.services.compliance_service import run_compliance_check
+from app.integrations.cache import get_or_fetch_heatmap
 from app.routes.auth import router as auth_router
 from app.schemas.site import SiteResponse
 from app.schemas.compliance_check import ComplianceCheckResponse
@@ -37,6 +38,36 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(auth_router)
+
+
+def _normalize_satellite_context_payload(result: dict) -> tuple[dict, str]:
+    """Normalize API-version differences in the FortyGuard satellite payload."""
+    payload = result.get("result", {}) if isinstance(result, dict) else {}
+    segmentation = payload.get("segmentation") or {}
+    segments = segmentation.get("segments") or {}
+
+    candidates: list[str] = []
+    for key in ("original_image", "orignal_image"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            candidates.extend(str(item) for item in value if item is not None)
+        elif value is not None:
+            candidates.append(str(value))
+
+    image_content = segmentation.get("image_content")
+    if image_content is not None:
+        candidates.append(str(image_content))
+
+    image = ""
+    for candidate in candidates:
+        if not candidate:
+            continue
+        image = candidate
+        break
+
+    if image and not image.startswith("data:image/") and "base64," not in image:
+        image = f"data:image/png;base64,{image}"
+    return segments, image
 
 
 @app.exception_handler(DomainError)
@@ -142,6 +173,9 @@ async def site_context(
     site = await db.get(Site, site_id)
     if site is None or site.org_id != current_user.org_id:
         raise SiteNotFoundError("Site not found")
+    org = await db.get(Organization, current_user.org_id)
+    if org.plan != Plan.STANDARD:
+        raise PermissionDeniedError("Environmental context requires the Standard plan")
 
     centroid = shapely_shape(site.polygon_geojson["features"][0]["geometry"]).centroid
     target_date = (date.today() - timedelta(days=6)).isoformat()
@@ -151,13 +185,15 @@ async def site_context(
         "longitude": centroid.x,
         "start_date": target_date,
         "filter_type": 3,
-        "granularity": 60,
+        "granularity": 100,
     }
-    result = await get_or_fetch_heatmap(
-        lambda: get_satellite_segmentation_async(**params),
-        is_historical=True,
-        **params,
-    )
-    segments = result.get("result", {}).get("segmentation", {}).get("segments", {})
-    image = result.get("result", {}).get("orignal_image", [""])[0]
+    try:
+        result = await get_or_fetch_heatmap(
+            lambda: get_satellite_segmentation_async(**params),
+            is_historical=True,
+            **params,
+        )
+    except (TaskTimeoutError, TaskFailedError, FortyGuardError) as exc:
+        raise UpstreamDataError(f"Satellite context unavailable: {exc}") from exc
+    segments, image = _normalize_satellite_context_payload(result)
     return {"site_id": site.id, "segments": segments, "satellite_image_base64": image}

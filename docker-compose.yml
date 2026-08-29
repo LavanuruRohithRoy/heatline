@@ -21,6 +21,9 @@ services:
     build: ./backend
     env_file:
       - ./backend/.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://heatline:heatline@postgres:5432/heatline
+      REDIS_URL: redis://redis:6379/0
     depends_on:
       - postgres
       - redis

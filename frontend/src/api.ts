@@ -26,11 +26,20 @@ api.interceptors.response.use(
 
 export function apiError(error: unknown, fallback = "Something went wrong. Please try again.") {
   if (!axios.isAxiosError(error)) return fallback;
-  const detail = error.response?.data?.detail;
-  if (typeof detail !== "string") return fallback;
-  if (detail.includes("No features returned")) return "No heat data is available for this site and date yet. Try again shortly.";
-  if (detail.includes("UAE compliance checks")) return "Live checks are currently available only for US sites. UAE rules are coming soon.";
-  if (detail.includes("Rate limit exceeded")) return "This organization has reached its hourly check limit. Please try again later.";
-  if (detail.includes("Only admins or HSE managers")) return "Only admins and HSE managers can add sites.";
-  return detail;
+
+  const rawDetail = error.response?.data?.detail;
+  if (typeof rawDetail === "string" && rawDetail.trim()) return rawDetail;
+
+  const status = error.response?.status;
+  if (status === 401) return "Invalid email or password.";
+  if (status === 400) return "This request could not be processed. Please check the form and try again.";
+  if (status === 403) return "You do not have permission to do that.";
+  if (status === 404) return "This resource could not be found.";
+  if (status === 429) return "Too many requests. Please wait a moment and try again.";
+
+  if (typeof error.response?.data === "string" && error.response.data.trim()) {
+    return error.response.data;
+  }
+
+  return fallback;
 }
