@@ -66,7 +66,36 @@ function Header() {
   </header>;
 }
 
-function Shell({ children }: { children: React.ReactNode }) { return <><Header />{children}</>; }
+function Footer() {
+  return (
+    <footer className="border-t border-white/10 bg-[#0d1113]">
+      <div className="mx-auto flex max-w-7xl flex-col gap-3 px-5 py-6 text-xs text-white/35 md:flex-row md:items-center md:justify-between md:px-8">
+        <div>
+          <p className="font-semibold text-white/60">Heatline</p>
+          <p className="mt-1">
+            Hyperlocal heat-compliance decision support.
+          </p>
+        </div>
+
+        <div className="text-left md:text-right">
+          <p>Built for FortyGuard Hackathon '26</p>
+          <p className="mt-1">Powered by FortyGuard Temperature API</p>
+          <p className="mt-1">© 2026 Heatline. All rights reserved.</p>
+        </div>
+      </div>
+    </footer>
+  );
+}
+
+function Shell({ children }: { children: React.ReactNode }) {
+  return (
+    <>
+      <Header />
+      {children}
+      <Footer />
+    </>
+  );
+}
 function ProtectedRoute({ children }: { children: React.ReactNode }) { return isAuthenticated() ? <>{children}</> : <Navigate to="/login" replace />; }
 
 function Landing() {
@@ -115,7 +144,18 @@ function DetailPanel({ site, result, onClose }: { site: Site; result?: CheckResu
 
 function Dashboard() {
   const [sites, setSites] = useState<Site[]>([]); const [results, setResults] = useState<Record<string, CheckResult>>({}); const [selected, setSelected] = useState<Site>(); const [showAdd, setShowAdd] = useState(false); const [plan, setPlan] = useState<"trial" | "standard">("trial"); const [loading, setLoading] = useState(true); const [error, setError] = useState(""); const [upgrading, setUpgrading] = useState(false); const [upgradeMessage, setUpgradeMessage] = useState("");
-  useEffect(() => { api.get<Site[]>("/sites").then((response) => setSites(response.data)).catch((requestError) => setError(getErrorMessage(requestError))).finally(() => setLoading(false)); }, []);
+  useEffect(() => {
+  Promise.all([
+    api.get<Site[]>("/sites"),
+    api.get<Organization>("/organizations/me"),
+  ])
+    .then(([sitesResponse, organizationResponse]) => {
+      setSites(sitesResponse.data);
+      setPlan(organizationResponse.data.plan);
+    })
+    .catch((requestError) => setError(getErrorMessage(requestError)))
+    .finally(() => setLoading(false));
+  }, []);
   const checkedCount = Object.keys(results).length; const breachedCount = Object.values(results).filter((result) => result.threshold_breached).length;
   const upgrade = async () => { setUpgrading(true); setError(""); setUpgradeMessage(""); try { const response = await api.post<Organization>("/organizations/upgrade"); setPlan(response.data.plan); setUpgradeMessage("Environmental context unlocked for Standard."); } catch (requestError) { setError(getErrorMessage(requestError)); } finally { setUpgrading(false); } };
   return <main className="page-grid min-h-[calc(100vh-73px)]"><div className="mx-auto max-w-7xl px-5 py-8 md:px-8"><div className="flex flex-col justify-between gap-6 md:flex-row md:items-end"><div><p className="eyebrow">Operations overview</p><h1 className="mt-2 font-display text-4xl font-bold tracking-tight text-white">Your heatline</h1><p className="mt-3 max-w-xl text-sm leading-6 text-white/45">Make the next safe decision with site-specific environmental signals.</p></div><div className="flex flex-wrap gap-2"><span className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white/60"><ShieldCheck size={15} className="text-amber-300" /> {plan} plan</span>{plan === "trial" && <button className="button-primary px-3 py-2" onClick={upgrade} disabled={upgrading}>{upgrading && <Loader2 size={15} className="animate-spin" />}Upgrade demo plan</button>}{upgradeMessage && <span className="basis-full text-xs text-emerald-200/80">{upgradeMessage}</span>}<button className="button-primary px-3 py-2" onClick={() => setShowAdd(true)}><Plus size={16} /> Add site</button></div></div>{error && <div className="mt-6 rounded-lg border border-rose-300/20 bg-rose-300/10 p-3 text-sm text-rose-200">{error}</div>}<div className="mt-8 grid grid-cols-2 gap-3 md:grid-cols-3"><div className="panel p-4"><p className="text-xs text-white/40">Portfolio sites</p><p className="mt-2 font-display text-3xl font-bold text-white">{sites.length}</p></div><div className="panel p-4"><p className="text-xs text-white/40">Checked this session</p><p className="mt-2 font-display text-3xl font-bold text-white">{checkedCount}</p></div><div className="panel col-span-2 p-4 md:col-span-1"><p className="text-xs text-white/40">Action required</p><p className="mt-2 font-display text-3xl font-bold text-rose-200">{breachedCount}</p></div></div><div className="mt-5 grid gap-5 xl:grid-cols-[1.1fr_.9fr]"><div className="panel p-2"><div className="h-[390px] md:h-[560px]">{loading ? <div className="grid h-full place-items-center text-white/45"><Loader2 className="animate-spin" /></div> : <MapView sites={sites} selectedId={selected?.id} onSelect={setSelected} />}</div><div className="flex flex-wrap gap-4 px-3 py-3 text-xs text-white/45"><span className="font-semibold text-white/60">Jurisdiction</span>{Object.entries(jurisdictionLabels).map(([key, label]) => <span key={key} className="flex items-center gap-1.5"><i className="h-2 w-2 rounded-full" style={{ backgroundColor: jurisdictionColors[key as Jurisdiction] }} />{label}</span>)}</div></div><div className="space-y-3">{selected ? <DetailPanel site={selected} result={results[selected.id]} onClose={() => setSelected(undefined)} /> : <div><div className="mb-3 flex items-center justify-between"><div><p className="eyebrow">Portfolio checks</p><p className="mt-1 text-sm text-white/45">Run a decision or select a site for more detail.</p></div></div>{sites.length ? sites.map((site) => <div className="mb-3" key={site.id}><SiteCard site={site} result={results[site.id]} onResult={(result) => { setResults((current) => ({ ...current, [site.id]: result })); setSelected(site); }} onSelect={() => setSelected(site)} /></div>) : <div className="panel p-7 text-center text-sm text-white/45">No sites yet. Add your first work site to begin.</div>}</div>}</div></div></div>{showAdd && <AddSiteModal onClose={() => setShowAdd(false)} onCreated={(site) => setSites((current) => [...current, site])} />}</main>;

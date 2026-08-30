@@ -148,6 +148,15 @@ async def check_site(
         raise UpstreamDataError(f"FortyGuard request failed: {exc}") from exc
     return result
 
+@app.get("/organizations/me", response_model=OrganizationResponse)
+async def get_my_organization(
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    org = await db.get(Organization, current_user.org_id)
+    if not org:
+        raise SiteNotFoundError("Organization not found")
+    return org
 
 @app.post("/organizations/upgrade", response_model=OrganizationResponse)
 async def upgrade_org(
