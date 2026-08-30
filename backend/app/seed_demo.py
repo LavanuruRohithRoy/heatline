@@ -35,8 +35,7 @@ async def seed_demo():
     database_url = settings.database_url
     if database_url.startswith("postgresql://"):
         database_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
-    connect_args = {"statement_cache_size": 0} if ":6543/" in database_url else {}
-    engine = create_async_engine(database_url, connect_args=connect_args)
+    engine = create_async_engine(database_url, connect_args={"statement_cache_size": 0})
     async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with async_session() as session:
         existing_org = await session.execute(
