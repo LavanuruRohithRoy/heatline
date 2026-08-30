@@ -2,7 +2,7 @@ name: Keep Backend Alive
 
 on:
   schedule:
-    - cron: "*/13 * * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 jobs:
