@@ -1,5 +1,5 @@
-import uuid
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy.pool import NullPool
 from app.core.config import settings
 
 database_url = settings.database_url
@@ -8,11 +8,13 @@ if database_url.startswith("postgresql://"):
 
 engine = create_async_engine(
     database_url,
+    poolclass=NullPool,
     connect_args={
         "statement_cache_size": 0,
-        "prepared_statement_name_func": lambda: f"__asyncpg_{uuid.uuid4()}__",
+        "prepared_statement_name_func": lambda: "",
     },
 )
+
 async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
 
