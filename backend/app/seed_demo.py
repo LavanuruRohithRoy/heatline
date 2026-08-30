@@ -1,4 +1,5 @@
 import asyncio
+import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
@@ -35,7 +36,13 @@ async def seed_demo():
     database_url = settings.database_url
     if database_url.startswith("postgresql://"):
         database_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
-    engine = create_async_engine(database_url, connect_args={"statement_cache_size": 0})
+    engine = create_async_engine(
+        database_url,
+        connect_args={
+            "statement_cache_size": 0,
+            "prepared_statement_name_func": lambda: f"__asyncpg_{uuid.uuid4()}__",
+        },
+    )
     async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with async_session() as session:
         existing_org = await session.execute(
