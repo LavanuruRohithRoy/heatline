@@ -76,6 +76,7 @@ async def domain_error_handler(request: Request, exc: DomainError):
 
 
 @app.get("/health")
+@app.head("/health")
 async def health() -> dict:
     return {"status": "ok"}
 
