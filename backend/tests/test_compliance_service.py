@@ -1,9 +1,10 @@
 import pytest
 import uuid
 from unittest.mock import AsyncMock, patch
-from app.main import _normalize_satellite_context_payload
+from app.main import _normalize_satellite_context_payload, site_heatmap_tiles
 from app.services.compliance_service import run_compliance_check
 from app.models import Site, Jurisdiction, ThresholdRule, MetricType
+from app.core.security import CurrentUser
 from app.core.exceptions import UpstreamDataError
 from app.integrations.exceptions import TaskTimeoutError
 
@@ -181,3 +182,36 @@ def test_normalize_satellite_context_supports_documented_aliases():
 
     assert segments == {"roof": 42.0}
     assert image == "data:image/png;base64,xyz123"
+
+
+@pytest.mark.asyncio
+async def test_heatmap_tiles_returns_converted_tiles_and_jurisdiction_threshold(async_session):
+    site = Site(
+        org_id=uuid.uuid4(), name="Tile Site",
+        polygon_geojson={"type": "FeatureCollection", "features": []},
+        jurisdiction=Jurisdiction.CAL_OSHA,
+    )
+    async_session.add(site)
+    await async_session.flush()
+    async_session.add_all([
+        ThresholdRule(jurisdiction="cal_osha", metric_type=MetricType.DRY_BULB_TEMPERATURE, heat_index_threshold_f=80.0, mandated_action="shade", citation="test"),
+        ThresholdRule(jurisdiction="cal_osha", metric_type=MetricType.DRY_BULB_TEMPERATURE, heat_index_threshold_f=95.0, mandated_action="high_heat", citation="test"),
+    ])
+    await async_session.flush()
+
+    tile_payload = {
+        "result": {"map_data": {"features": [
+            {"geometry": {"type": "Polygon", "coordinates": []}, "properties": {"max_temperature": 0.0}},
+            {"geometry": {"type": "Polygon", "coordinates": []}, "properties": {"max_temperature": 35.0}},
+        ]}}
+    }
+    with patch("app.main.get_or_fetch_heatmap", new=AsyncMock(return_value=tile_payload)):
+        response = await site_heatmap_tiles(
+            site.id,
+            CurrentUser(uuid.uuid4(), site.org_id, "admin"),
+            async_session,
+        )
+
+    assert response["metric_label"] == "Temperature"
+    assert response["tiles"][0]["temp_f"] == pytest.approx(32.0)
+    assert response["tiles"][1]["temp_f"] == pytest.approx(95.0)

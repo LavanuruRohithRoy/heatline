@@ -39,6 +39,17 @@ export interface EnvironmentalContext {
   satellite_image_base64: string;
 }
 
+export interface HeatmapTile {
+  geometry: Record<string, unknown>;
+  temp_f: number;
+}
+
+export interface TileData {
+  site_id: string;
+  metric_label: string;
+  tiles: HeatmapTile[];
+}
+
 export interface Organization {
   id: string;
   name: string;
