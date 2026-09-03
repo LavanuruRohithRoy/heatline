@@ -1,23 +1,23 @@
 import uuid
-from fastapi import FastAPI, Depends, Request
+from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr, field_validator
 from datetime import date, timedelta
 
 from app.core.config import settings
 from app.core.db import get_db
-from app.core.security import get_current_user, CurrentUser
+from app.core.security import get_current_user, CurrentUser, hash_password
 from app.core.rate_limit import enforce_check_rate_limit, PLAN_LIMITS
 from app.core.exceptions import DomainError, SiteNotFoundError, UpstreamDataError
-from app.models import Site, Jurisdiction, Organization, Plan, ThresholdRule, MetricType
+from app.models import Site, Jurisdiction, Organization, Plan, ThresholdRule, MetricType, User, UserRole, ComplianceCheck
 from app.services.compliance_service import run_compliance_check
 from app.integrations.fortyguard_service import create_heatmap_async
 from app.integrations.cache import get_or_fetch_heatmap
 from app.routes.auth import router as auth_router
-from app.schemas.site import SiteResponse
+from app.schemas.site import SiteResponse, PublicSiteResponse
 from app.schemas.compliance_check import ComplianceCheckResponse
 from app.schemas.organization import OrganizationResponse
 from app.schemas.heatmap import HeatmapTilesResponse
@@ -83,7 +83,7 @@ async def health() -> dict:
     return {"status": "ok"}
 
 
-@app.get("/public/sites", response_model=list[SiteResponse])
+@app.get("/public/sites", response_model=list[PublicSiteResponse])
 async def public_sites(db: AsyncSession = Depends(get_db)):
     """No auth required — only returns sites belonging to designated public-demo orgs."""
     result = await db.execute(
@@ -91,7 +91,33 @@ async def public_sites(db: AsyncSession = Depends(get_db)):
         .join(Organization, Site.org_id == Organization.id)
         .where(Organization.is_public_demo == True)  # noqa: E712
     )
-    return result.scalars().all()
+    sites = result.scalars().all()
+    if not sites:
+        return []
+
+    site_ids = [site.id for site in sites]
+    checks_result = await db.execute(
+        select(ComplianceCheck)
+        .where(ComplianceCheck.site_id.in_(site_ids))
+        .order_by(ComplianceCheck.checked_at.desc())
+    )
+    latest_by_site: dict = {}
+    for check in checks_result.scalars():
+        if check.site_id not in latest_by_site:
+            latest_by_site[check.site_id] = check
+
+    payload = []
+    for site in sites:
+        latest = latest_by_site.get(site.id)
+        payload.append(
+            PublicSiteResponse(
+                **SiteResponse.model_validate(site).model_dump(),
+                latest_result=(
+                    ComplianceCheckResponse.model_validate(latest) if latest else None
+                ),
+            )
+        )
+    return payload
 
 
 class SiteCreate(BaseModel):
@@ -100,12 +126,42 @@ class SiteCreate(BaseModel):
     jurisdiction: Jurisdiction
 
 
+class MemberCreateRequest(BaseModel):
+    email: EmailStr
+    password: str
+    role: UserRole
+
+    @field_validator("role")
+    @classmethod
+    def reject_admin_role(cls, value: UserRole) -> UserRole:
+        if value == UserRole.ADMIN:
+            raise ValueError("Admin accounts can only be created via registration")
+        return value
+
+
+class MemberResponse(BaseModel):
+    id: uuid.UUID
+    email: str
+    role: UserRole
+
+    model_config = {"from_attributes": True}
+
+
+_SITE_WRITE_ROLES = {UserRole.ADMIN.value, UserRole.HSE_MANAGER.value}
+
+
+def _require_site_write_access(current_user: CurrentUser) -> None:
+    if current_user.role not in _SITE_WRITE_ROLES:
+        raise PermissionDeniedError("Viewers cannot create sites or run compliance checks")
+
+
 @app.post("/sites", response_model=SiteResponse)
 async def create_site(
     payload: SiteCreate,
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    _require_site_write_access(current_user)
     org = await db.get(Organization, current_user.org_id)
     existing_count_result = await db.execute(
         select(Site).where(Site.org_id == current_user.org_id)
@@ -138,6 +194,7 @@ async def check_site(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    _require_site_write_access(current_user)
     site = await db.get(Site, site_id)
     if site is None or site.org_id != current_user.org_id:
         raise SiteNotFoundError("Site not found")
@@ -160,6 +217,31 @@ async def get_my_organization(
     if not org:
         raise SiteNotFoundError("Organization not found")
     return org
+
+@app.post("/organizations/members", response_model=MemberResponse)
+async def create_organization_member(
+    payload: MemberCreateRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.role != UserRole.ADMIN.value:
+        raise PermissionDeniedError("Only admins can add organization members")
+
+    existing = await db.execute(select(User).where(User.email == payload.email))
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    user = User(
+        org_id=current_user.org_id,
+        email=payload.email,
+        password_hash=hash_password(payload.password),
+        role=payload.role,
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    return user
+
 
 @app.post("/organizations/upgrade", response_model=OrganizationResponse)
 async def upgrade_org(

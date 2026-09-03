@@ -1,6 +1,7 @@
 import uuid
 from pydantic import BaseModel
 from app.models import Jurisdiction
+from app.schemas.compliance_check import ComplianceCheckResponse
 
 
 class SiteResponse(BaseModel):
@@ -11,3 +12,7 @@ class SiteResponse(BaseModel):
     jurisdiction: Jurisdiction
 
     model_config = {"from_attributes": True}
+
+
+class PublicSiteResponse(SiteResponse):
+    latest_result: ComplianceCheckResponse | None = None

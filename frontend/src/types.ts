@@ -7,6 +7,7 @@ export interface Site {
   name: string;
   polygon_geojson: Record<string, unknown>;
   jurisdiction: Jurisdiction;
+  latest_result?: HistoricalCheck | null;
 }
 
 export interface HistoricalCheck {

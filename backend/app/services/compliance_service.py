@@ -4,11 +4,11 @@ from enum import Enum
 from shapely.geometry import shape
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.models import Site, ThresholdRule, ComplianceCheck, MetricType
+from app.models import Site, ThresholdRule, ComplianceCheck, MetricType, Jurisdiction
 from app.integrations.fortyguard_service import create_heatmap_async, get_env_params_async
 from app.integrations.cache import get_or_fetch_heatmap
 from app.integrations.exceptions import TaskTimeoutError, TaskFailedError, FortyGuardError
-from app.core.exceptions import UpstreamDataError
+from app.core.exceptions import UpstreamDataError, UnsupportedJurisdictionError
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +26,12 @@ class CheckMode(str, Enum):
 
 
 async def run_compliance_check(session: AsyncSession, site: Site, mode: CheckMode = CheckMode.HISTORICAL):
+    if site.jurisdiction == Jurisdiction.UAE:
+        raise UnsupportedJurisdictionError(
+            "UAE sites cannot be checked automatically: FortyGuard currently covers US locations only, "
+            "so no live compliance evaluation is available for this jurisdiction."
+        )
+
     target_date = (date.today() - timedelta(days=6)).isoformat()
     filter_type = 3
     start_time = None

@@ -1,8 +1,11 @@
 import pytest
 import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from app.models import Base
+from app.core.db import get_db
 from app.core.redis_client import redis_client
+from app.main import app
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -23,3 +26,15 @@ async def async_session():
         yield session
 
     await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def client(async_session):
+    async def override_get_db():
+        yield async_session
+
+    app.dependency_overrides[get_db] = override_get_db
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as http:
+        yield http
+    app.dependency_overrides.clear()

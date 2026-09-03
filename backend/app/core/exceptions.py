@@ -14,3 +14,8 @@ class PermissionDeniedError(DomainError):
 class SiteNotFoundError(DomainError):
     status_code = 404
 
+
+class UnsupportedJurisdictionError(DomainError):
+    """Jurisdiction is modeled but cannot be evaluated against live FortyGuard data."""
+    status_code = 400
+

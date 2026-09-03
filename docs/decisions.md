@@ -95,3 +95,16 @@ specific HTTP status codes (404/403/502) via a single exception handler.
 **Why:** decouples the public API contract from internal persistence
 schema, and gives API consumers a machine-distinguishable reason for
 failure instead of a uniform 500.
+
+## ADR-010: Re-check JWT claims against the User row on every request
+
+**Decision:** `get_current_user` still issues a 24-hour JWT and does **not**
+introduce refresh tokens. After a successful decode it loads the `User` by
+`sub` and rejects the request with the same 401 used for an invalid token
+if the row is gone, or if `role` / `org_id` no longer match the claims.
+
+**Why:** role changes and account removal must take effect on the next
+request instead of remaining valid until natural expiry (up to 24h). The
+cost is one extra primary-key read per authenticated request; that is
+accepted. Full refresh-token rotation remains a deferred roadmap item and
+is not solved by this change.

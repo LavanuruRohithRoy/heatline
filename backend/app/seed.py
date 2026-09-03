@@ -1,4 +1,5 @@
 import asyncio
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from app.core.config import settings
@@ -43,14 +44,34 @@ THRESHOLD_RULES = [
 ]
 
 
+async def seed_threshold_rules(session: AsyncSession) -> tuple[int, int]:
+    inserted = 0
+    skipped = 0
+    for rule in THRESHOLD_RULES:
+        existing = await session.execute(
+            select(ThresholdRule)
+            .where(
+                ThresholdRule.jurisdiction == rule["jurisdiction"],
+                ThresholdRule.metric_type == rule["metric_type"],
+                ThresholdRule.heat_index_threshold_f == rule["heat_index_threshold_f"],
+            )
+            .limit(1)
+        )
+        if existing.scalar_one_or_none() is not None:
+            skipped += 1
+            continue
+        session.add(ThresholdRule(**rule))
+        inserted += 1
+    await session.commit()
+    return inserted, skipped
+
+
 async def seed():
     engine = create_async_engine(settings.database_url)
     async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with async_session() as session:
-        for rule in THRESHOLD_RULES:
-            session.add(ThresholdRule(**rule))
-        await session.commit()
-    print(f"Seeded {len(THRESHOLD_RULES)} threshold rules.")
+        inserted, skipped = await seed_threshold_rules(session)
+    print(f"Inserted {inserted} threshold rules; skipped {skipped} already present")
     await engine.dispose()
 
 

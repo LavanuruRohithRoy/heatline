@@ -5,7 +5,7 @@ from app.main import _normalize_satellite_context_payload, site_heatmap_tiles
 from app.services.compliance_service import run_compliance_check
 from app.models import Site, Jurisdiction, ThresholdRule, MetricType
 from app.core.security import CurrentUser
-from app.core.exceptions import UpstreamDataError
+from app.core.exceptions import UpstreamDataError, UnsupportedJurisdictionError
 from app.integrations.exceptions import TaskTimeoutError
 
 MOCK_HEATMAP_RESPONSE = {
@@ -165,6 +165,37 @@ async def test_compliance_check_persists_metric_metadata(async_session):
 
     assert check.metric_label == "Heat Index"
     assert check.data_as_of == (__import__("datetime").date.today() - __import__("datetime").timedelta(days=6)).isoformat()
+
+
+@pytest.mark.asyncio
+async def test_uae_site_check_raises_unsupported_jurisdiction_before_vendor(async_session):
+    site = Site(
+        org_id=uuid.uuid4(), name="Dubai Yard",
+        polygon_geojson={"type": "FeatureCollection", "features": []},
+        jurisdiction=Jurisdiction.UAE,
+    )
+    async_session.add(site)
+    await async_session.flush()
+
+    async_session.add(
+        ThresholdRule(
+            jurisdiction="uae",
+            metric_type=MetricType.DRY_BULB_TEMPERATURE,
+            heat_index_threshold_f=None,
+            mandated_action="work_stoppage_midday_window",
+            citation="test",
+        )
+    )
+    await async_session.flush()
+
+    with patch(
+        "app.services.compliance_service.create_heatmap_async",
+        new=AsyncMock(),
+    ) as mock_heatmap:
+        with pytest.raises(UnsupportedJurisdictionError, match="FortyGuard currently covers US"):
+            await run_compliance_check(async_session, site)
+
+    mock_heatmap.assert_not_called()
 
 
 def test_normalize_satellite_context_supports_documented_aliases():
