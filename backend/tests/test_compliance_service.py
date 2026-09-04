@@ -1,8 +1,14 @@
 import pytest
 import uuid
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, patch, call
 from app.main import _normalize_satellite_context_payload, site_heatmap_tiles
-from app.services.compliance_service import run_compliance_check
+from app.services.compliance_service import (
+    run_compliance_check,
+    find_latest_heatmap_date,
+    _tile_diagnostics,
+    LOOKBACK_START_DAYS,
+    LOOKBACK_MAX_DAYS,
+)
 from app.models import Site, Jurisdiction, ThresholdRule, MetricType
 from app.core.security import CurrentUser
 from app.core.exceptions import UpstreamDataError, UnsupportedJurisdictionError
@@ -236,7 +242,14 @@ async def test_heatmap_tiles_returns_converted_tiles_and_jurisdiction_threshold(
             {"geometry": {"type": "Polygon", "coordinates": []}, "properties": {"max_temperature": 35.0}},
         ]}}
     }
-    with patch("app.main.get_or_fetch_heatmap", new=AsyncMock(return_value=tile_payload)):
+    # find_latest_heatmap_date() lives in compliance_service.py and calls
+    # create_heatmap_async directly from there — patch that boundary, not
+    # app.main.get_or_fetch_heatmap (stale target after the lookback refactor,
+    # was silently falling through to a real HTTP call to FortyGuard).
+    with patch(
+        "app.services.compliance_service.create_heatmap_async",
+        new=AsyncMock(return_value=tile_payload),
+    ):
         response = await site_heatmap_tiles(
             site.id,
             CurrentUser(uuid.uuid4(), site.org_id, "admin"),
@@ -246,3 +259,118 @@ async def test_heatmap_tiles_returns_converted_tiles_and_jurisdiction_threshold(
     assert response["metric_label"] == "Temperature"
     assert response["tiles"][0]["temp_f"] == pytest.approx(32.0)
     assert response["tiles"][1]["temp_f"] == pytest.approx(95.0)
+    # diagnostics field must be present and correct for the two mock tiles
+    assert response["diagnostics"]["tile_count"] == 2
+    assert response["diagnostics"]["min_temp_f"] == pytest.approx(32.0)
+    assert response["diagnostics"]["max_temp_f"] == pytest.approx(95.0)
+
+
+# =============================================================================
+# Part 1 — Tile diagnostics
+# =============================================================================
+
+# Outlier is 66°C → 150.8°F; two normal tiles are 30°C (86°F) and 35°C (95°F)
+FEATURES_WITH_OUTLIER = [
+    {"properties": {"max_temperature": 30.0}, "geometry": {"type": "Polygon", "coordinates": []}},
+    {"properties": {"max_temperature": 35.0}, "geometry": {"type": "Polygon", "coordinates": []}},
+    {"properties": {"max_temperature": 66.0}, "geometry": {"type": "Polygon", "coordinates": []}},
+]
+# 30°C→86°F, 35°C→95°F, 66°C→150.8°F
+# mean = (86+95+150.8)/3 = 110.6°F; median = 95°F
+
+
+def test_tile_diagnostics_correct_stats_with_outlier():
+    """_tile_diagnostics must report accurate min/max/mean/median and outlier count."""
+    import statistics as _statistics
+
+    diag = _tile_diagnostics(FEATURES_WITH_OUTLIER)
+
+    assert diag["tile_count"] == 3
+    assert diag["min_temp_f"] == pytest.approx(86.0, abs=0.1)
+    assert diag["max_temp_f"] == pytest.approx(150.8, abs=0.1)
+    assert diag["mean_temp_f"] == pytest.approx((86.0 + 95.0 + 150.8) / 3, abs=0.1)
+    assert diag["median_temp_f"] == pytest.approx(95.0, abs=0.1)
+    # Only the 66°C tile (150.8°F) exceeds the 130°F threshold.
+    assert diag["outliers_over_130f"] == 1
+
+
+def test_tile_diagnostics_no_outliers_when_all_normal():
+    """All normal tiles → outlier count must be zero."""
+    features = [
+        {"properties": {"max_temperature": 30.0}, "geometry": {}},
+        {"properties": {"max_temperature": 32.0}, "geometry": {}},
+    ]
+    diag = _tile_diagnostics(features)
+    assert diag["outliers_over_130f"] == 0
+    assert diag["tile_count"] == 2
+
+
+# =============================================================================
+# Part 2 — Lookback retry
+# =============================================================================
+
+def _empty_heatmap():
+    return {"result": {"map_data": {"features": []}}}
+
+
+def _nonempty_heatmap():
+    return {
+        "result": {
+            "map_data": {
+                "features": [
+                    {
+                        "properties": {"max_temperature": 35.0, "average_temperature": 30.0, "min_temperature": 25.0},
+                        "geometry": {"type": "Polygon", "coordinates": [[[-118.25, 34.05], [-118.24, 34.05], [-118.24, 34.06], [-118.25, 34.06], [-118.25, 34.05]]]},
+                    }
+                ]
+            }
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_find_latest_heatmap_date_retries_on_empty_first_day():
+    """When LOOKBACK_START_DAYS returns empty features, the helper must retry at
+    LOOKBACK_START_DAYS+1 and return successfully once features are found."""
+    call_count = 0
+
+    async def _mock_create_heatmap(**kwargs):
+        nonlocal call_count
+        call_count += 1
+        # First call (LOOKBACK_START_DAYS) is empty; second (LOOKBACK_START_DAYS+1) succeeds.
+        if call_count == 1:
+            return _empty_heatmap()
+        return _nonempty_heatmap()
+
+    test_polygon = {"type": "FeatureCollection", "features": []}
+
+    with patch(
+        "app.services.compliance_service.create_heatmap_async",
+        new=AsyncMock(side_effect=_mock_create_heatmap),
+    ):
+        target_date, features = await find_latest_heatmap_date(test_polygon)
+
+    assert features, "Expected non-empty features on retry"
+    assert call_count == 2  # one empty + one success
+    # The returned date must correspond to LOOKBACK_START_DAYS+1, not LOOKBACK_START_DAYS.
+    from datetime import date, timedelta
+    expected_date = (date.today() - timedelta(days=LOOKBACK_START_DAYS + 1)).isoformat()
+    assert target_date == expected_date
+
+
+@pytest.mark.asyncio
+async def test_find_latest_heatmap_date_raises_when_all_days_empty():
+    """If every candidate day returns empty features (up to LOOKBACK_MAX_DAYS),
+    find_latest_heatmap_date must raise UpstreamDataError and stop — no infinite loop."""
+    test_polygon = {"type": "FeatureCollection", "features": []}
+
+    with patch(
+        "app.services.compliance_service.create_heatmap_async",
+        new=AsyncMock(return_value=_empty_heatmap()),
+    ) as mock_heatmap:
+        with pytest.raises(UpstreamDataError, match="No heatmap features found"):
+            await find_latest_heatmap_date(test_polygon)
+
+    # Must have tried exactly (LOOKBACK_MAX_DAYS - LOOKBACK_START_DAYS + 1) days and stopped.
+    expected_calls = LOOKBACK_MAX_DAYS - LOOKBACK_START_DAYS + 1
+    assert mock_heatmap.await_count == expected_calls

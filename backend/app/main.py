@@ -11,21 +11,18 @@ from app.core.config import settings
 from app.core.db import get_db
 from app.core.security import get_current_user, CurrentUser, hash_password
 from app.core.rate_limit import enforce_check_rate_limit, PLAN_LIMITS
-from app.core.exceptions import DomainError, SiteNotFoundError, UpstreamDataError
+from app.core.exceptions import DomainError, SiteNotFoundError, UpstreamDataError, PermissionDeniedError
 from app.models import Site, Jurisdiction, Organization, Plan, ThresholdRule, MetricType, User, UserRole, ComplianceCheck
-from app.services.compliance_service import run_compliance_check
-from app.integrations.fortyguard_service import create_heatmap_async
+from app.services.compliance_service import run_compliance_check, CheckMode, find_latest_heatmap_date, _tile_diagnostics
+from app.integrations.fortyguard_service import create_heatmap_async, get_satellite_segmentation_async
 from app.integrations.cache import get_or_fetch_heatmap
+from app.integrations.exceptions import TaskTimeoutError, TaskFailedError, FortyGuardError
 from app.routes.auth import router as auth_router
 from app.schemas.site import SiteResponse, PublicSiteResponse
 from app.schemas.compliance_check import ComplianceCheckResponse
 from app.schemas.organization import OrganizationResponse
 from app.schemas.heatmap import HeatmapTilesResponse
-from app.core.exceptions import DomainError, SiteNotFoundError, PermissionDeniedError
-from app.services.compliance_service import run_compliance_check, CheckMode
 from shapely.geometry import shape as shapely_shape
-from app.integrations.fortyguard_service import create_heatmap_async, get_satellite_segmentation_async
-from app.integrations.exceptions import TaskTimeoutError, TaskFailedError, FortyGuardError
 
 app = FastAPI(title="Heatline API", version="0.1.0")
 app.add_middleware(
@@ -303,26 +300,22 @@ async def site_heatmap_tiles(
     if site is None or site.org_id != current_user.org_id:
         raise SiteNotFoundError("Site not found")
 
-    target_date = (date.today() - timedelta(days=6)).isoformat()
-    heatmap_params = {
-        "polygon_aoi": site.polygon_geojson,
-        "start_date": target_date,
-        "filter_type": 3,
-        "granularity": 60,
-        "analytic_type": "tcm",
-    }
+    # Use the shared lookback helper so this endpoint and run_compliance_check
+    # always probe the same date range and can't drift independently.
     try:
-        result = await get_or_fetch_heatmap(
-            lambda: create_heatmap_async(**heatmap_params),
-            is_historical=True,
-            **heatmap_params,
+        target_date, features = await find_latest_heatmap_date(
+            site.polygon_geojson,
+            filter_type=3,
+            granularity=60,
+            analytic_type="tcm",
         )
     except (TaskTimeoutError, TaskFailedError, FortyGuardError) as exc:
         raise UpstreamDataError(f"FortyGuard request failed: {exc}") from exc
 
-    features = result["result"]["map_data"]["features"]
     if not features:
         raise UpstreamDataError("No tile data available — run a check first")
+
+    diag = _tile_diagnostics(features)
 
     return {
         "site_id": site.id,
@@ -334,4 +327,5 @@ async def site_heatmap_tiles(
             }
             for feature in features
         ],
+        "diagnostics": diag,
     }
